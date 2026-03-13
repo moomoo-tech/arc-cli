@@ -1,0 +1,23 @@
+name: Security Common Rules
+description: Common security rules for code review
+
+rules:
+  - name: no-hardcoded-secrets
+    description: "Do not hardcode API keys, tokens, passwords, or other secrets in source code."
+    severity: critical
+
+  - name: no-sql-injection
+    description: "Always use parameterized queries; never interpolate user input into SQL strings."
+    severity: critical
+
+  - name: no-shell-injection
+    description: "Avoid shell=True in subprocess calls. If unavoidable, never pass unsanitized user input."
+    severity: critical
+
+  - name: validate-external-input
+    description: "All input from external sources (HTTP, files, env) must be validated before use."
+    severity: error
+
+  - name: no-eval-exec
+    description: "Do not use eval() or exec() with untrusted input."
+    severity: critical

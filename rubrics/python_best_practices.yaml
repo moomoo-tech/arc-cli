@@ -1,0 +1,23 @@
+name: Python Best Practices
+description: Common Python code quality rules
+
+rules:
+  - name: no-bare-except
+    description: "Do not use bare 'except:' — always catch specific exceptions."
+    severity: error
+
+  - name: no-mutable-default-args
+    description: "Do not use mutable default arguments (list, dict, set) in function signatures."
+    severity: error
+
+  - name: use-pathlib
+    description: "Prefer pathlib.Path over os.path for file system operations."
+    severity: warning
+
+  - name: type-hints-required
+    description: "All public functions must have type hints for parameters and return values."
+    severity: warning
+
+  - name: docstrings-required
+    description: "All public modules, classes, and functions must have docstrings."
+    severity: warning
