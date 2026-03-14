@@ -143,13 +143,13 @@ def main():
         for uid, update in updates.items():
             target = update.get("file_line", "")
 
-            # Double Jeopardy: re-filed issue on a settled code location
-            if uid not in issue_threads and target in seen_targets:
+            # Double Jeopardy: re-filed issue on a settled code location (fuzzy ±3 lines)
+            if uid not in issue_threads and _is_double_jeopardy(target, seen_targets):
                 if args.strict:
-                    print(f"  [blocked] {uid} ({target}) — Double Jeopardy: already settled.")
+                    print(f"  [blocked] {uid} ({target}) — Double Jeopardy: within blast radius of settled issue.")
                     continue
                 else:
-                    print(f"  [warning] {uid} ({target}) — re-filing on settled location.")
+                    print(f"  [warning] {uid} ({target}) — re-filing near settled location.")
 
             if uid in issue_threads:
                 old_status = issue_threads[uid]["status"]
@@ -259,14 +259,8 @@ def main():
             break
 
     # ── Battle Report ──────────────────────────────────────────
-    print(f"\n{'=' * 60}")
-    print("         A.R.C. Battle Report")
-    print(f"{'=' * 60}\n")
 
-    audit = critic.audit(issue_threads)
-    print(audit)
-
-    # MVP
+    # Compute objective stats before audit
     total = len(issue_threads)
     fixed = len([i for i in issue_threads.values() if i["status"] == "resolved"])
     acked = len([i for i in issue_threads.values() if i["status"] == "acknowledged"])
@@ -274,23 +268,76 @@ def main():
     disagrees = sum(
         1 for i in issue_threads.values()
         for h in i["history"]
-        if h["role"] == "agent" and h["content"].startswith("[DISAGREE]")
+        if h["role"] == "agent" and "[DISAGREE]" in h["content"]
     )
 
+    # Build objective stats string to force honest scoring
+    objective_stats = (
+        f"- Total issues: {total}\n"
+        f"- Resolved: {fixed}, Acknowledged: {acked}, Open: {open_count}\n"
+        f"- Agent [DISAGREE] pushbacks: {disagrees}\n"
+    )
+    if acked > 0:
+        objective_stats += f"- Critic was wrong on {acked} issue(s) (acknowledged = Critic error).\n"
+    if disagrees >= 5:
+        objective_stats += "- The Agent overwhelmingly dominated the debates. The Critic was frequently incorrect.\n"
+
     print(f"\n{'=' * 60}")
-    print(f"  Issues: {total} total | {fixed} fixed | {acked} acknowledged | {open_count} open")
-    print(f"  Pushbacks: {disagrees} [DISAGREE] from Agent")
+    print("         A.R.C. Battle Report")
+    print(f"{'=' * 60}")
+
+    # Objective scoreboard first
+    print(f"\n  [Objective Scoreboard]")
+    print(f"  Issues    : {total} total | {fixed} fixed | {acked} acknowledged | {open_count} open")
+    print(f"  Pushbacks : {disagrees} [DISAGREE] from Agent")
     if disagrees >= 2:
-        print(f"  MVP: Agent (won {disagrees} debates)")
+        print(f"  MVP       : Agent (won {disagrees} debates)")
     elif fixed > total // 2:
-        print(f"  MVP: Critic (found {total} issues, {fixed} fixed)")
+        print(f"  MVP       : Critic (found {total} issues, {fixed} fixed)")
     else:
-        print(f"  MVP: Draw")
+        print(f"  MVP       : Draw")
+    print(f"{'-' * 60}")
+
+    # Critic's subjective audit second
+    print("\n  [Critic's Audit]")
+    audit = critic.audit(issue_threads, objective_stats=objective_stats)
+    print(audit)
     print(f"{'=' * 60}")
 
     # Dump threads
     print("\n--- Final Issue State (JSON) ---")
     print(json.dumps(issue_threads, indent=2, ensure_ascii=False))
+
+
+def _is_double_jeopardy(new_target: str, seen_targets: set[str], radius: int = 3) -> bool:
+    """Fuzzy match file_line to prevent LLM from re-filing by tweaking line numbers."""
+    if not new_target:
+        return False
+
+    def parse(t: str):
+        parts = str(t).rsplit(":", 1)
+        filepath = parts[0].strip()
+        lines = [int(x) for x in re.findall(r"\d+", parts[1])] if len(parts) > 1 else []
+        return filepath, lines
+
+    new_f, new_l = parse(new_target)
+    if not new_f:
+        return False
+
+    for seen in seen_targets:
+        if not seen:
+            continue
+        seen_f, seen_l = parse(seen)
+        if new_f != seen_f:
+            continue
+        # Same file, no line numbers on either side = file-level match
+        if not new_l or not seen_l:
+            return True
+        # Both have line numbers — check within radius
+        if any(abs(n - s) <= radius for n in new_l for s in seen_l):
+            return True
+
+    return False
 
 
 def _fallback_agent_reply(issue_threads: dict, open_issues: dict, output: str) -> None:

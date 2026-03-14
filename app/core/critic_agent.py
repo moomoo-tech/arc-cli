@@ -52,6 +52,11 @@ Your tasks:
 3. NEVER re-report an issue that already has an ISSUE-ID. Check the threads first.
 4. SILENCE ON CLOSED ISSUES: If an issue is already "resolved" or "acknowledged",
    DO NOT include it in your output. Only output "open" issues and new issues.
+5. RES JUDICATA (No Double Jeopardy): If an underlying topic (e.g., a package version,
+   a model ID, a file's tracking status) was debated and settled in previous threads,
+   DO NOT create a new ISSUE-ID to re-argue the same point. Even with a different line
+   number or slightly reworded complaint — if the core argument is the same, it is
+   forbidden. Accept the outcome and move on.
 
 You MUST output ONLY a JSON object (no markdown fences, no extra text) like:
 {
@@ -185,22 +190,21 @@ class CriticAgent:
             print(f"[Critic] JSON parse error ({e}):\n{json_str[:200]}")
             return {}
 
-        # Physical filter: drop echoed closed issues the LLM ignored the prompt about
+        # Absolute lock: once closed, no updates allowed (prevents zombie re-opening)
         filtered = {}
         for uid, update in parsed.items():
             if uid in issue_threads:
                 old = issue_threads[uid].get("status")
-                new = update.get("status")
-                if old in ("resolved", "acknowledged") and new in ("resolved", "acknowledged"):
+                if old in ("resolved", "acknowledged"):
                     continue
             filtered[uid] = update
         return filtered
 
-    def audit(self, issue_threads: dict) -> str:
+    def audit(self, issue_threads: dict, objective_stats: str = "") -> str:
         """Generate audit report from the final issue threads state."""
         system = (
-            "You are the principal architect generating a post-mortem audit report. "
-            "Read the final issue state and produce a structured report."
+            "You are the principal architect generating an UNBIASED post-mortem audit report. "
+            "You must base your scores on the objective facts provided, not your ego."
         )
         user = (
             "Generate an audit report with these fields:\n"
@@ -208,10 +212,15 @@ class CriticAgent:
             "2. **Total Issues**: How many issues were tracked.\n"
             "3. **Resolved / Acknowledged / Open**: Counts by status.\n"
             "4. **Fix Rate**: (resolved + acknowledged) / total as percentage.\n"
-            "5. **Invalid Suggestions**: Issues acknowledged because the critic was wrong.\n"
-            "6. **Critic Score** (1-10): How precise were the review comments?\n"
-            "7. **Actor Score** (1-10): How well did the engineer execute fixes?\n"
+            "5. **Critic Hallucinations**: Issues where YOU (Critic) were wrong.\n"
+            "6. **Critic Score** (1-10): How precise were YOUR review comments?\n"
+            "7. **Agent Score** (1-10): How well did the engineer execute fixes?\n"
             "8. **Final Advice**: One sentence for the human team lead.\n\n"
+            "SCORING RULE: The orchestrator has computed these objective facts:\n"
+            f"{objective_stats}\n"
+            "You MUST incorporate these facts into your scores. If the Agent won many "
+            "debates against your hallucinations, penalize your Critic Score and give "
+            "the Agent a high score. Be honest.\n\n"
             f"--- Final Issue State ---\n"
             f"{json.dumps(issue_threads, indent=2, ensure_ascii=False)}"
         )
