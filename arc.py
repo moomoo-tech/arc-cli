@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""A.R.C. CLI — Agent Review Critic (Actor-Critic Loop with Audit)."""
+"""A.R.C. CLI — Agent Review Critic (Blackboard Pattern)."""
 
 import argparse
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,18 +16,33 @@ DEFAULT_RUBRICS = [str(p) for p in RUBRIC_DIR.glob("*.yaml")]
 
 MAX_TURNS = 3
 
-CLAUDE_PROMPT_TEMPLATE = (
-    "You are a senior engineer. "
-    "Fix the local code based strictly on the following review report. "
-    "Do not add anything beyond what the report asks for.\n\n"
-    "You MUST respond to EVERY comment in the review, one by one, using this format:\n"
-    "- [FIXED] <file:line> — what you changed\n"
-    "- [NOT FIXED] <file:line> — why you could not fix it (e.g. needs human decision)\n"
-    "- [DISAGREE] <file:line> — why the reviewer is wrong (hallucination, incorrect assumption)\n\n"
-    "After all comments, add:\n"
-    "[Reviewer Score: X/10] followed by a short reason.\n\n"
-    "--- Review Report ---\n{review}"
-)
+CLAUDE_PROMPT_TEMPLATE = """You are a senior engineer. Fix the code based on the open issues below.
+Each issue has a history of comments between the architect (critic) and you (actor).
+Read the full history of each issue carefully before acting.
+
+Rules:
+1. Fix what you can. Push back on what you cannot or disagree with.
+2. Every reply MUST start with exactly one of these tags:
+   - [FIXED] — you changed the code. Say what you did.
+   - [NOT FIXED] — you cannot fix it (needs human decision). Say why.
+   - [DISAGREE] — the architect is wrong (hallucinated file/package, wrong assumption,
+     intentional design choice). Give a clear, factual reason.
+3. If you already disagreed in a prior turn and the architect re-opened the same issue,
+   hold your ground. Repeat your reasoning with evidence.
+
+After all fixes, you MUST end your response with an <audit_reply> XML tag containing
+a JSON object keyed by ISSUE-ID:
+
+<audit_reply>
+{{
+  "ISSUE-1": "[FIXED] Changed to use os.getenv()",
+  "ISSUE-2": "[DISAGREE] google-genai is the correct package. genai.Client() is the valid API.",
+  "ISSUE-3": "[NOT FIXED] Needs human decision on auth provider."
+}}
+</audit_reply>
+
+--- Open Issues ---
+{open_issues}"""
 
 
 def main():
@@ -47,7 +64,7 @@ def main():
     )
     parser.add_argument(
         "--fix", action="store_true", default=False,
-        help="Enable Actor-Critic loop: Gemini reviews, Claude fixes",
+        help="Enable Actor-Critic loop with structured issue tracking",
     )
     parser.add_argument(
         "--max-turns", type=int, default=MAX_TURNS,
@@ -60,7 +77,7 @@ def main():
     agent = CriticAgent(rubric_paths=rubric_paths)
 
     if not args.fix:
-        # Single-shot review
+        # Single-shot free-form review
         diff, repo_context = _build_context(args.scope, repo_path, turn=1)
         print("[A.R.C.] Running review...\n")
         review = agent.review(diff=diff, repo_context=repo_context)
@@ -69,78 +86,137 @@ def main():
         print("=" * 60)
         return
 
-    # Actor-Critic Loop with session ledger
+    # Blackboard Pattern: structured issue threads
     print(f"[A.R.C.] Starting Actor-Critic loop (max {args.max_turns} turns)...\n")
-    session_log: list[str] = []
-    converged = False
+    issue_threads: dict = {}
 
     for turn in range(1, args.max_turns + 1):
         print(f"--- Turn {turn}/{args.max_turns} ---")
 
-        # Re-read context each turn
+        # Re-read context each turn (actor may have changed files)
         diff, repo_context = _build_context(args.scope, repo_path, turn)
 
-        # Critic
+        # Critic: review and return structured JSON updates
         print("[Critic] Reviewing...")
-        review = agent.review(diff=diff, repo_context=repo_context)
-        session_log.append(f"[Turn {turn} - Critic Review]\n{review}")
+        updates = agent.review_stateful(
+            issue_threads=issue_threads,
+            diff=diff,
+            repo_context=repo_context,
+        )
 
-        # Convergence check
-        if "[PASS]" in review:
-            print(f"\n[A.R.C.] PASS — converged on turn {turn}.")
-            print("=" * 60)
-            print(review)
-            print("=" * 60)
-            converged = True
+        # Merge updates into issue_threads
+        for uid, update in updates.items():
+            if uid not in issue_threads:
+                issue_threads[uid] = {
+                    "status": "open",
+                    "file_line": update.get("file_line", "unknown"),
+                    "severity": update.get("severity", "warning"),
+                    "history": [],
+                }
+            issue_threads[uid]["status"] = update.get("status", "open")
+            if update.get("file_line"):
+                issue_threads[uid]["file_line"] = update["file_line"]
+            if update.get("severity"):
+                issue_threads[uid]["severity"] = update["severity"]
+            issue_threads[uid]["history"].append({
+                "role": "critic",
+                "content": update.get("reply", ""),
+            })
+
+        # Print current state
+        open_issues = {k: v for k, v in issue_threads.items() if v["status"] == "open"}
+        resolved = {k: v for k, v in issue_threads.items() if v["status"] == "resolved"}
+        acked = {k: v for k, v in issue_threads.items() if v["status"] == "acknowledged"}
+
+        print(f"  Open: {len(open_issues)} | Resolved: {len(resolved)} | Acknowledged: {len(acked)}")
+        for uid, issue in open_issues.items():
+            print(f"  [{uid}] {issue['severity'].upper()} {issue['file_line']}: {issue['history'][-1]['content'][:80]}")
+
+        # Convergence: no open issues
+        if not open_issues:
+            print(f"\n[A.R.C.] PASS — converged on turn {turn}. All issues resolved or acknowledged.")
             break
-
-        print("=" * 60)
-        print(review)
-        print("=" * 60)
 
         # Last turn — no point invoking actor
         if turn == args.max_turns:
-            print(f"\n[A.R.C.] Reached max turns ({args.max_turns}). Human takeover needed.")
+            print(f"\n[A.R.C.] Reached max turns ({args.max_turns}). {len(open_issues)} issue(s) still open.")
             break
 
-        # Actor
+        # Actor: send only open issues to Claude
         print(f"\n[Actor] Invoking Claude Code (turn {turn})...")
-        claude_prompt = CLAUDE_PROMPT_TEMPLATE.format(review=review)
+        claude_prompt = CLAUDE_PROMPT_TEMPLATE.format(
+            open_issues=json.dumps(open_issues, indent=2, ensure_ascii=False),
+        )
 
         try:
             result = subprocess.run(
-                ["claude", "-p", claude_prompt, "--allowedTools", "Read,Edit,Bash"],
+                ["claude", "-p", "-", "--allowedTools", "Read,Edit,Bash"],
+                input=claude_prompt,
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
                 check=True,
             )
             actor_output = result.stdout
-            session_log.append(f"[Turn {turn} - Actor Execution]\n{actor_output}")
-            agent.add_actor_feedback(actor_output)
+
+            # Print Claude's full response
             print("=" * 60)
             print(actor_output)
             print("=" * 60)
-            print(f"\n[Actor] Turn {turn} fixes applied. Re-reviewing...\n")
+
+            # Extract structured reply from <audit_reply> tags
+            match = re.search(
+                r"<audit_reply>\s*(\{.*?\})\s*</audit_reply>",
+                actor_output,
+                re.DOTALL,
+            )
+            if match:
+                try:
+                    replies = json.loads(match.group(1))
+                    for uid, reply in replies.items():
+                        if uid in issue_threads:
+                            issue_threads[uid]["history"].append({
+                                "role": "actor",
+                                "content": reply,
+                            })
+                    print(f"[Actor] Parsed {len(replies)} structured replies.\n")
+                except json.JSONDecodeError:
+                    print("[Actor] Warning: invalid JSON in <audit_reply>. Using fallback.\n")
+                    _fallback_actor_reply(issue_threads, open_issues, actor_output)
+            else:
+                print("[Actor] Warning: no <audit_reply> tag found. Using fallback.\n")
+                _fallback_actor_reply(issue_threads, open_issues, actor_output)
+
         except FileNotFoundError:
-            session_log.append(f"[Turn {turn} - Actor Error]\nclaude CLI not found")
             print("[A.R.C.] `claude` not found. Install: npm install -g @anthropic-ai/claude-code")
             break
         except subprocess.CalledProcessError as e:
-            session_log.append(f"[Turn {turn} - Actor Error]\n{e.stderr}")
             print(f"[A.R.C.] Claude exited with code {e.returncode}")
             break
 
     # Audit report
     print("\n[A.R.C.] Generating audit report...\n")
-    full_log = "\n\n".join(session_log)
-    audit = agent.audit(full_log)
+    audit = agent.audit(issue_threads)
 
     print("=" * 60)
     print("         A.R.C. Audit Report")
     print("=" * 60)
     print(audit)
     print("=" * 60)
+
+    # Dump final state
+    print("\n--- Final Issue State (JSON) ---")
+    print(json.dumps(issue_threads, indent=2, ensure_ascii=False))
+
+
+def _fallback_actor_reply(issue_threads: dict, open_issues: dict, output: str) -> None:
+    """When Claude doesn't provide structured reply, stuff raw output into all open issues."""
+    snippet = output[-500:] if len(output) > 500 else output
+    for uid in open_issues:
+        issue_threads[uid]["history"].append({
+            "role": "actor",
+            "content": f"[unstructured response] {snippet}",
+        })
 
 
 def _build_context(scope: str, repo_path: str, turn: int):
