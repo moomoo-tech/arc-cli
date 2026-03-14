@@ -118,7 +118,10 @@ def main():
             actor_output = result.stdout
             session_log.append(f"[Turn {turn} - Actor Execution]\n{actor_output}")
             agent.add_actor_feedback(actor_output)
-            print(f"[Actor] Turn {turn} fixes applied. Re-reviewing...\n")
+            print("=" * 60)
+            print(actor_output)
+            print("=" * 60)
+            print(f"\n[Actor] Turn {turn} fixes applied. Re-reviewing...\n")
         except FileNotFoundError:
             session_log.append(f"[Turn {turn} - Actor Error]\nclaude CLI not found")
             print("[A.R.C.] `claude` not found. Install: npm install -g @anthropic-ai/claude-code")
