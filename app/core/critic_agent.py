@@ -1,105 +1,93 @@
-"""Core critic agent: assembles prompts, calls LLM, and produces review comments."""
-
-import json
-import re
-
-import anthropic
+"""Critic agent: assembles context, calls LLM, returns review comments."""
 
 from app.core.rubric_parser import RubricParser
+from app.llm.factory import create_client
 from config.settings import settings
 
-SYSTEM_PROMPT = """You are A.R.C. (Agent Review Critic), a ruthless code review agent.
-You exist solely to critique — you never write feature code.
+SYSTEM_PROMPT = """You are A.R.C. (Agent Review Critic), a ruthless yet precise code review agent.
+You exist solely to critique — you never write or fix code.
 
 Your job:
-1. Review the diff against the provided rubric rules.
-2. For each violation found, output a structured review comment.
-3. If the code is clean, say so briefly.
+1. Review the code provided below.
+2. For each issue found, output a clear, actionable review comment.
+3. If the code is completely clean with no issues, output exactly [PASS] and nothing else.
 
-Output format — return a JSON array of objects, each with:
-- "path": the file path from the diff header
-- "line": the line number in the new file where the issue is (best guess from diff context)
-- "body": your review comment in Markdown. Be specific, cite the rule, suggest a fix direction.
-- "severity": one of "critical", "error", "warning", "info"
-
-If no issues found, return an empty array: []
+For each issue include:
+- File path and line number
+- Severity: critical / error / warning / info
+- What's wrong and how to fix it (direction only — don't write the fix)
 
 Rules:
-- Only flag real violations, not style nitpicks unless a rubric rule covers it.
+- Flag real bugs, security issues, architectural problems, and code smells.
 - Be concise and actionable. No fluff.
-- Include the rule name in each comment body, e.g. "[no-bare-except] ..."
+- When all issues are resolved, you MUST output [PASS].
 """
 
 
 class CriticAgent:
-    """A.R.C. brain — reviews code diffs against architectural rubrics."""
+    """Calls LLM to review code. Returns review text."""
 
     def __init__(self, rubric_paths: list[str] | None = None):
-        self.parser = RubricParser()
-        self.rubrics = self.parser.load(rubric_paths or [])
-        self.client = anthropic.Anthropic(api_key=settings.llm_api_key)
+        self.client = create_client(
+            provider=settings.llm_provider,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+        )
+        self.rubric_text = ""
+        if rubric_paths:
+            parser = RubricParser()
+            rules = parser.load(rubric_paths)
+            self.rubric_text = parser.format_rules(rules)
 
-    async def review(self, diff: str, context: dict | None = None) -> list[dict]:
-        """Review a code diff and return a list of review comments.
+    def review(
+        self,
+        diff: str | None = None,
+        repo_context: str | None = None,
+    ) -> str:
+        """Review code based on whatever context is provided.
 
         Args:
-            diff: The unified diff string to review.
-            context: Optional metadata (repo, PR number, file paths, etc.).
+            diff: Git diff string (optional).
+            repo_context: Full repo contents (optional).
 
         Returns:
-            A list of comment dicts with keys: path, line, body, severity.
+            Review text (Markdown).
         """
-        user_prompt = self._build_prompt(diff, context)
+        parts = []
 
-        response = self.client.messages.create(
-            model=settings.llm_model,
-            max_tokens=4096,
+        if self.rubric_text:
+            parts.append(f"## Rubric Rules\n{self.rubric_text}")
+
+        if diff:
+            parts.append(f"## Current Changes (Git Diff)\n{diff}")
+
+        if repo_context:
+            parts.append(f"## Full Codebase\n{repo_context}")
+
+        return self.client.chat(
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            user="\n\n".join(parts),
         )
 
-        return self._parse_response(response.content[0].text)
-
-    def _build_prompt(self, diff: str, context: dict | None = None) -> str:
-        """Assemble the user prompt from rubrics and the diff."""
-        rubric_text = self.parser.format_rules(self.rubrics)
-
-        parts = [
-            "## Rubric Rules\n",
-            rubric_text,
-            "\n\n## Diff to Review\n",
-            diff,
-        ]
-
-        if context:
-            parts.insert(0, f"PR #{context.get('pr_number', '?')} in {context.get('repo', '?')}\n\n")
-
-        return "".join(parts)
-
-    def _parse_response(self, text: str) -> list[dict]:
-        """Parse the LLM response into structured comment dicts."""
-        # Extract JSON array from response (may be wrapped in markdown fences)
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-        if not match:
-            return []
-
-        try:
-            comments = json.loads(match.group())
-        except json.JSONDecodeError:
-            return []
-
-        # Validate and normalize each comment
-        valid = []
-        for c in comments:
-            if not isinstance(c, dict):
-                continue
-            if "body" not in c:
-                continue
-            valid.append({
-                "path": c.get("path", ""),
-                "line": c.get("line", 1),
-                "body": c["body"],
-                "severity": c.get("severity", "warning"),
-            })
-
-        return valid
+    def audit(self, session_log: str) -> str:
+        """Generate a structured audit report from the full session log."""
+        system = (
+            "You are the principal architect generating a post-mortem audit report. "
+            "Read the full pipeline log and produce a structured report."
+        )
+        user = (
+            "Generate an audit report with these fields:\n"
+            "1. **Turns**: How many review cycles were consumed.\n"
+            "2. **Initial Issues**: How many issues the critic raised in turn 1.\n"
+            "3. **Fixed / Remaining**: How many were fixed vs still open.\n"
+            "4. **Fix Rate**: Percentage.\n"
+            "5. **Invalid Suggestions**: Issues the actor could not execute "
+            "(wrong line numbers, hallucinated files, over-engineering).\n"
+            "6. **Critic Score** (architect rates the actor, 1-10): "
+            "How precise were the code fixes?\n"
+            "7. **Actor Score** (actor rates the architect, 1-10): "
+            "Extract from the actor's self-reported score in the log.\n"
+            "8. **Final Advice**: One sentence for the human team lead.\n\n"
+            f"--- Session Log ---\n{session_log}"
+        )
+        return self.client.chat(system=system, user=user)

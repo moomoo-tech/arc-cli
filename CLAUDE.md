@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A.R.C. (Agent Review Critic) is a code review agent that critiques code written by other agents or humans against architectural rubrics (YAML rule files). It does not write feature code — it exists solely to review and critique.
+A.R.C. (Agent Review Critic) is a CLI tool that reviews code against architectural rubrics (YAML rule files). It brute-force reads your entire repo, sends it with the git diff to Claude via native Tool Use, and gets back a review with optional auto-fixes.
 
 - **Language:** Python 3.12+
 - **License:** Apache 2.0
@@ -15,36 +15,41 @@ A.R.C. (Agent Review Critic) is a code review agent that critiques code written 
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the server
-uvicorn app.api.webhook_receiver:app --host 0.0.0.0 --port 8000
+# Run a review on the current repo
+python arc.py
 
-# Docker
-docker build -t arc .
-docker run -p 8000:8000 --env-file .env arc
+# Review a specific repo
+python arc.py /path/to/repo
+
+# Review only (no auto-fixes)
+python arc.py --review-only
+
+# Use custom rubrics
+python arc.py --rubrics my_rules.yaml
 ```
 
 ## Architecture
 
-Four modules under `app/`, each with a single responsibility:
+Three modules, dead simple:
 
-- **`app/api/`** — FastAPI gateway. Receives GitHub webhooks, validates signatures, dispatches to the critic agent. Entry point: `webhook_receiver.py`.
-- **`app/core/`** — The "brain". `critic_agent.py` assembles prompts from rubrics + diffs and calls the LLM. `rubric_parser.py` loads and formats YAML rule files from `rubrics/`.
-- **`app/githandler/`** — PyGithub wrapper. `client.py` fetches PR diffs and posts review comments back to GitHub.
-- **`app/local_runner/`** — Local "hands". `actor_watchdog.py` polls a directory for instruction files and invokes Aider to act on review feedback.
+- **`arc.py`** — CLI entry point (argparse). Orchestrates the flow: diff → context → agent loop → output.
+- **`app/context.py`** — Brute-force repo context builder. Walks the entire repo, packs all code files into one string. No AST, no optimization.
+- **`app/core/critic_agent.py`** — Pure Claude Agent Loop. Sends rubrics + diff + full repo to Claude with Tool Use. Claude reviews and calls `apply_code_patch` to fix issues directly.
+- **`app/core/rubric_parser.py`** — YAML rubric loader. Reads `rubrics/*.yaml` and formats rules for the prompt.
 
-Supporting directories:
+### Flow
 
-- **`rubrics/`** — YAML rubric files (global default rules). Each file has a `rules` list with `name`, `description`, `severity`.
-- **`config/settings.py`** — Pydantic Settings loaded from env vars prefixed with `ARC_` (or `.env` file).
+1. `arc.py` runs `git diff` and reads the entire repo into a string.
+2. Sends everything (rubrics + diff + full codebase) to Claude in one shot.
+3. Claude reviews against rubrics, calls `apply_code_patch` tool to fix issues.
+4. Python executes the search-and-replace on disk, feeds result back to Claude.
+5. Loop until Claude stops calling tools. Print summary.
 
 ## Configuration
 
-All config via environment variables (prefix `ARC_`):
+Environment variables (prefix `ARC_`) or `.env` file:
 
 | Variable | Purpose |
 |---|---|
-| `ARC_GITHUB_TOKEN` | GitHub API token |
-| `ARC_GITHUB_WEBHOOK_SECRET` | Webhook HMAC secret |
-| `ARC_LLM_API_KEY` | LLM API key |
-| `ARC_LLM_MODEL` | LLM model ID |
-| `ARC_WATCH_DIR` | Local runner watch directory |
+| `ARC_LLM_API_KEY` | Anthropic API key |
+| `ARC_LLM_MODEL` | LLM model ID (default: claude-sonnet-4-20250514) |
