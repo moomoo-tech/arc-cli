@@ -1,68 +1,102 @@
-"""Brute-force repo context builder: dump the entire repo into one string."""
+"""Repo context builder: git-aware file extraction with noise filtering."""
 
-import os
 import subprocess
 from pathlib import Path
 
-# Extensions we consider "code" — everything else is skipped
-CODE_EXTENSIONS = {
-    ".py", ".yaml", ".yml", ".md", ".json", ".sh", ".bash",
-    ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java",
-    ".toml", ".cfg", ".ini", ".txt", ".html", ".css", ".sql",
-    ".rb", ".c", ".cpp", ".h", ".hpp", ".swift", ".kt",
-    ".dockerfile", ".tf", ".hcl", ".proto",
+# Files that are noise for code review even if git-tracked
+IGNORED_FILES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "poetry.lock", "Pipfile.lock", "Cargo.lock", ".DS_Store",
 }
 
-# Directories to always skip
-SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".tox", ".mypy_cache"}
+# Extensions with no code review value
+IGNORED_EXTENSIONS = {
+    # binaries
+    ".pyc", ".pyo", ".pyd", ".so", ".dll", ".dylib", ".exe", ".bin", ".whl", ".egg",
+    # media
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp",
+    ".ttf", ".woff", ".woff2", ".mp3", ".mp4", ".wav",
+    # archives & data
+    ".pdf", ".zip", ".tar", ".gz", ".rar", ".7z",
+    ".sqlite", ".sqlite3", ".db", ".jar",
+}
+
+# Skip files larger than this (prevents token explosion)
+MAX_FILE_SIZE = 200 * 1024  # 200KB
 
 
 def get_git_diff(repo_path: str = ".") -> str:
     """Get the current unstaged + staged diff."""
-    # Staged changes
-    staged = subprocess.run(
-        ["git", "diff", "--cached"],
-        cwd=repo_path, capture_output=True, text=True,
-    ).stdout
-
-    # Unstaged changes
-    unstaged = subprocess.run(
-        ["git", "diff"],
-        cwd=repo_path, capture_output=True, text=True,
-    ).stdout
+    try:
+        staged = subprocess.run(
+            ["git", "diff", "--cached"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+        unstaged = subprocess.run(
+            ["git", "diff"],
+            cwd=repo_path, capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return ""
 
     parts = []
-    if staged:
-        parts.append(staged)
-    if unstaged:
-        parts.append(unstaged)
+    if staged.stdout:
+        parts.append(staged.stdout)
+    if unstaged.stdout:
+        parts.append(unstaged.stdout)
     return "\n".join(parts)
 
 
 def get_whole_repo_context(repo_path: str = ".") -> str:
-    """Pack the entire repo into one big string. No optimization, pure brute force.
+    """Extract repo context using git ls-files with noise filtering.
 
-    Skips .git, __pycache__, node_modules, and binary files.
+    Three layers of defense:
+    1. git ls-files: only tracked files (inherits .gitignore)
+    2. Extension + filename filter: skip binaries, media, lock files
+    3. Size limit: skip files > 200KB
     """
+    repo_dir = Path(repo_path).resolve()
+
+    # Use git to get tracked files (respects .gitignore)
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=str(repo_dir),
+            capture_output=True, text=True, check=True,
+        )
+        tracked_files = result.stdout.splitlines()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
     context_parts = []
 
-    for root, dirs, files in os.walk(repo_path):
-        # Prune skipped directories in-place
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+    for rel_path in sorted(tracked_files):
+        file_path = repo_dir / rel_path
 
-        for filename in sorted(files):
-            ext = Path(filename).suffix.lower()
-            # Also include extensionless files like Dockerfile, Makefile
-            if ext not in CODE_EXTENSIONS and ext != "":
+        # Filter: extension
+        if file_path.suffix.lower() in IGNORED_EXTENSIONS:
+            continue
+
+        # Filter: noise files
+        if file_path.name in IGNORED_FILES:
+            continue
+
+        if not file_path.is_file():
+            continue
+
+        # Filter: size
+        try:
+            size = file_path.stat().st_size
+            if size > MAX_FILE_SIZE:
+                context_parts.append(f"--- {rel_path} [SKIPPED: >{MAX_FILE_SIZE // 1024}KB] ---")
                 continue
 
-            file_path = Path(root) / filename
-            rel_path = file_path.relative_to(repo_path)
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            if not content.strip():
+                continue
 
-            try:
-                content = file_path.read_text(encoding="utf-8")
-                context_parts.append(f"--- File: {rel_path} ---\n{content}")
-            except (UnicodeDecodeError, PermissionError):
-                pass  # binary or unreadable — skip silently
+            context_parts.append(f"--- {rel_path} ---\n{content}")
+        except (OSError, PermissionError):
+            pass
 
     return "\n\n".join(context_parts)
