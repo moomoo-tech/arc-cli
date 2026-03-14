@@ -185,11 +185,33 @@ def main():
 
         print(f"\n  Scoreboard: {len(open_issues)} open | {len(resolved)} resolved | {len(acked)} acknowledged")
         for uid, issue in open_issues.items():
-            reply = issue["history"][-1]["content"] if issue["history"] else ""
             print(f"\n  [{uid}] {issue.get('severity', 'warning').upper()} {issue.get('file', '?')}:~{issue.get('approx_line', '?')}")
             if issue.get("snippet"):
                 print(f"  Snippet: `{issue.get('snippet')}`")
-            print(f"  {reply}")
+            # Thread dialogue tree
+            print("  Thread:")
+            history = issue.get("history", [])
+            critic_count = 0
+            for idx, msg in enumerate(history):
+                is_last = idx == len(history) - 1
+                prefix = "  └─" if is_last else "  ├─"
+                content = msg["content"].strip().replace("\n", " ")
+                if len(content) > 120:
+                    content = content[:117] + "..."
+
+                if msg["role"] == "critic":
+                    critic_count += 1
+                    if critic_count == 1:
+                        tag = "[NEW]"
+                    elif issue["status"] == "resolved":
+                        tag = "[VERIFIED]"
+                    elif issue["status"] == "acknowledged":
+                        tag = "[ACKED]"
+                    else:
+                        tag = "[REOPEN]"
+                    print(f"  {prefix} Critic {tag}: {content}")
+                else:
+                    print(f"  {prefix} Agent: {content}")
 
         # Convergence
         if not open_issues:

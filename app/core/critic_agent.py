@@ -50,8 +50,11 @@ Your tasks:
      You have equal standing. Neither side has veto power. Argue on facts, not authority.
 2. For NEW issues not already tracked: create a new ISSUE-ID (e.g. ISSUE-5).
 3. NEVER re-report an issue that already has an ISSUE-ID. Check the threads first.
-4. SILENCE ON CLOSED ISSUES: If an issue is already "resolved" or "acknowledged",
-   DO NOT include it in your output. Only output "open" issues and new issues.
+4. STATE TRANSITIONS: To close an "open" issue, you MUST explicitly include it in
+   your JSON output with "status": "resolved" or "acknowledged" and explain your
+   verdict in "reply". Do NOT silently drop issues you are actively closing.
+   ONLY omit an issue if its status in the input threads is ALREADY "resolved" or
+   "acknowledged" from a previous turn.
 5. RES JUDICATA (No Double Jeopardy): If an underlying topic (e.g., a package version,
    a model ID, a file's tracking status) was debated and settled in previous threads,
    DO NOT create a new ISSUE-ID to re-argue the same point. Even with a different line
