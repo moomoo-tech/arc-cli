@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""A.R.C. CLI — Agent Review Critic (Blackboard Pattern)."""
+"""A.R.C. CLI — Adversarial Resolution Cycle."""
 
 import argparse
 import json
+import random
 import re
 import subprocess
 import sys
@@ -16,8 +17,24 @@ DEFAULT_RUBRICS = [str(p) for p in RUBRIC_DIR.glob("*.yaml")]
 
 MAX_TURNS = 3
 
-CLAUDE_PROMPT_TEMPLATE = """You are a senior engineer. Fix the code based on the open issues below.
-Each issue has a history of comments between the architect (critic) and you (actor).
+BANNER = r"""
+   ╔══════════════════════════════════════════╗
+   ║     [A] >>> ( R ) <<< [C]               ║
+   ║     {tagline:<37s}║
+   ╚══════════════════════════════════════════╝
+"""
+
+TAGLINES = [
+    "Adversarial Resolution Cycle",
+    "Automated Refactoring Court",
+    "Agent vs Repo vs Critic",
+    "Arena of Relentless Code Review",
+    "Arguments, Rebuttals, Convergence",
+]
+
+CLAUDE_PROMPT_TEMPLATE = """You are the Agent — a senior engineer in the A.R.C. (Adversarial Resolution Cycle).
+Fix the code based on the open issues below.
+Each issue has a history of debate between the Critic and you (Agent).
 Read the full history of each issue carefully before acting.
 
 Rules:
@@ -25,9 +42,9 @@ Rules:
 2. Every reply MUST start with exactly one of these tags:
    - [FIXED] — you changed the code. Say what you did.
    - [NOT FIXED] — you cannot fix it (needs human decision). Say why.
-   - [DISAGREE] — the architect is wrong (hallucinated file/package, wrong assumption,
+   - [DISAGREE] — the Critic is wrong (hallucinated file/package, wrong assumption,
      intentional design choice). Give a clear, factual reason.
-3. If you already disagreed in a prior turn and the architect re-opened the same issue,
+3. If you already disagreed in a prior round and the Critic re-opened the same issue,
    hold your ground. Repeat your reasoning with evidence.
 
 After all fixes, you MUST end your response with an <audit_reply> XML tag containing
@@ -45,10 +62,15 @@ a JSON object keyed by ISSUE-ID:
 {open_issues}"""
 
 
+def _banner():
+    tagline = random.choice(TAGLINES)
+    print(BANNER.format(tagline=tagline))
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="arc",
-        description="A.R.C. — Agent Review Critic.",
+        description="A.R.C. — Adversarial Resolution Cycle.",
     )
     parser.add_argument(
         "repo", nargs="?", default=".",
@@ -64,48 +86,77 @@ def main():
     )
     parser.add_argument(
         "--fix", action="store_true", default=False,
-        help="Enable Actor-Critic loop with structured issue tracking",
+        help="Enable Agent vs Critic loop with structured issue tracking",
     )
     parser.add_argument(
         "--max-turns", type=int, default=MAX_TURNS,
-        help=f"Max loop iterations for --fix (default: {MAX_TURNS})",
+        help=f"Max rounds for --fix (default: {MAX_TURNS})",
+    )
+    parser.add_argument(
+        "--strict", action="store_true", default=False,
+        help="Strict mode: block re-filed issues on settled code locations (Double Jeopardy)",
     )
     args = parser.parse_args()
 
     repo_path = str(Path(args.repo).resolve())
     rubric_paths = DEFAULT_RUBRICS if args.rubric else None
-    agent = CriticAgent(rubric_paths=rubric_paths)
+    critic = CriticAgent(rubric_paths=rubric_paths)
+
+    _banner()
 
     if not args.fix:
-        # Single-shot free-form review
+        # Single-shot review
         diff, repo_context = _build_context(args.scope, repo_path, turn=1)
-        print("[A.R.C.] Running review...\n")
-        review = agent.review(diff=diff, repo_context=repo_context)
-        print("=" * 60)
+        print("[Critic] Reviewing codebase...\n")
+        review = critic.review(diff=diff, repo_context=repo_context)
         print(review)
-        print("=" * 60)
         return
 
     # Blackboard Pattern: structured issue threads
-    print(f"[A.R.C.] Starting Actor-Critic loop (max {args.max_turns} turns)...\n")
+    print(f"[A.R.C.] Loading the arena (max {args.max_turns} rounds)...\n")
     issue_threads: dict = {}
 
     for turn in range(1, args.max_turns + 1):
-        print(f"--- Turn {turn}/{args.max_turns} ---")
+        # ── Critic's turn ──────────────────────────────────────
+        print(f"{'=' * 60}")
+        print(f"  ROUND {turn}/{args.max_turns}")
+        print(f"{'=' * 60}")
 
-        # Re-read context each turn (actor may have changed files)
         diff, repo_context = _build_context(args.scope, repo_path, turn)
 
-        # Critic: review and return structured JSON updates
+        # Double Jeopardy: collect file_lines that are already settled
+        seen_targets = {
+            issue["file_line"]
+            for issue in issue_threads.values()
+            if issue["status"] in ("resolved", "acknowledged") and issue.get("file_line")
+        }
+
         print("[Critic] Reviewing...")
-        updates = agent.review_stateful(
+        updates = critic.review_stateful(
             issue_threads=issue_threads,
             diff=diff,
             repo_context=repo_context,
+            seen_targets=seen_targets,
         )
 
-        # Merge updates into issue_threads
+        # Merge updates (skip noise on already-closed issues)
         for uid, update in updates.items():
+            target = update.get("file_line", "")
+
+            # Double Jeopardy: re-filed issue on a settled code location
+            if uid not in issue_threads and target in seen_targets:
+                if args.strict:
+                    print(f"  [blocked] {uid} ({target}) — Double Jeopardy: already settled.")
+                    continue
+                else:
+                    print(f"  [warning] {uid} ({target}) — re-filing on settled location.")
+
+            if uid in issue_threads:
+                old_status = issue_threads[uid]["status"]
+                new_status = update.get("status", old_status)
+                if old_status in ("resolved", "acknowledged") and new_status == old_status:
+                    continue
+
             if uid not in issue_threads:
                 issue_threads[uid] = {
                     "status": "open",
@@ -118,56 +169,69 @@ def main():
                 issue_threads[uid]["file_line"] = update["file_line"]
             if update.get("severity"):
                 issue_threads[uid]["severity"] = update["severity"]
-            issue_threads[uid]["history"].append({
-                "role": "critic",
-                "content": update.get("reply", ""),
-            })
+            reply = update.get("reply", "")
+            if reply:
+                issue_threads[uid]["history"].append({
+                    "role": "critic",
+                    "content": reply,
+                })
 
-        # Print current state
+        # Scoreboard
         open_issues = {k: v for k, v in issue_threads.items() if v["status"] == "open"}
         resolved = {k: v for k, v in issue_threads.items() if v["status"] == "resolved"}
         acked = {k: v for k, v in issue_threads.items() if v["status"] == "acknowledged"}
 
-        print(f"  Open: {len(open_issues)} | Resolved: {len(resolved)} | Acknowledged: {len(acked)}")
+        print(f"\n  Scoreboard: {len(open_issues)} open | {len(resolved)} resolved | {len(acked)} acknowledged")
         for uid, issue in open_issues.items():
-            print(f"  [{uid}] {issue['severity'].upper()} {issue['file_line']}: {issue['history'][-1]['content'][:80]}")
+            reply = issue["history"][-1]["content"] if issue["history"] else ""
+            print(f"\n  [{uid}] {issue['severity'].upper()} {issue['file_line']}")
+            print(f"  {reply}")
 
-        # Convergence: no open issues
+        # Convergence
         if not open_issues:
-            print(f"\n[A.R.C.] PASS — converged on turn {turn}. All issues resolved or acknowledged.")
+            print(f"\n[A.R.C.] All issues settled in round {turn}. Court adjourned.")
             break
 
-        # Last turn — no point invoking actor
+        # Last turn
         if turn == args.max_turns:
-            print(f"\n[A.R.C.] Reached max turns ({args.max_turns}). {len(open_issues)} issue(s) still open.")
+            print(f"\n[A.R.C.] Round limit reached ({args.max_turns}). {len(open_issues)} issue(s) escalated to human arbitration.")
             break
 
-        # Actor: send only open issues to Claude
-        print(f"\n[Actor] Invoking Claude Code (turn {turn})...")
+        # ── Agent's turn ───────────────────────────────────────
+        print(f"\n[Agent] Entering the arena (round {turn})...")
         claude_prompt = CLAUDE_PROMPT_TEMPLATE.format(
             open_issues=json.dumps(open_issues, indent=2, ensure_ascii=False),
         )
 
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 ["claude", "-p", "-", "--allowedTools", "Read,Edit,Bash"],
-                input=claude_prompt,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=sys.stderr,
                 cwd=repo_path,
-                capture_output=True,
                 text=True,
-                check=True,
             )
-            actor_output = result.stdout
+            proc.stdin.write(claude_prompt)
+            proc.stdin.close()
 
-            # Print Claude's full response
-            print("=" * 60)
-            print(actor_output)
-            print("=" * 60)
+            print("-" * 60)
+            agent_lines = []
+            for line in proc.stdout:
+                print(line, end="", flush=True)
+                agent_lines.append(line)
+            print("-" * 60)
 
-            # Extract structured reply from <audit_reply> tags
+            proc.wait()
+            agent_output = "".join(agent_lines)
+
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, "claude")
+
+            # Parse structured reply
             match = re.search(
                 r"<audit_reply>\s*(\{.*?\})\s*</audit_reply>",
-                actor_output,
+                agent_output,
                 re.DOTALL,
             )
             if match:
@@ -176,46 +240,65 @@ def main():
                     for uid, reply in replies.items():
                         if uid in issue_threads:
                             issue_threads[uid]["history"].append({
-                                "role": "actor",
+                                "role": "agent",
                                 "content": reply,
                             })
-                    print(f"[Actor] Parsed {len(replies)} structured replies.\n")
+                    print(f"[Agent] {len(replies)} responses logged.\n")
                 except json.JSONDecodeError:
-                    print("[Actor] Warning: invalid JSON in <audit_reply>. Using fallback.\n")
-                    _fallback_actor_reply(issue_threads, open_issues, actor_output)
+                    print("[Agent] Warning: malformed JSON in <audit_reply>.\n")
+                    _fallback_agent_reply(issue_threads, open_issues, agent_output)
             else:
-                print("[Actor] Warning: no <audit_reply> tag found. Using fallback.\n")
-                _fallback_actor_reply(issue_threads, open_issues, actor_output)
+                print("[Agent] Warning: no <audit_reply> tag found.\n")
+                _fallback_agent_reply(issue_threads, open_issues, agent_output)
 
         except FileNotFoundError:
             print("[A.R.C.] `claude` not found. Install: npm install -g @anthropic-ai/claude-code")
             break
         except subprocess.CalledProcessError as e:
-            print(f"[A.R.C.] Claude exited with code {e.returncode}")
+            print(f"[A.R.C.] Agent crashed with code {e.returncode}")
             break
 
-    # Audit report
-    print("\n[A.R.C.] Generating audit report...\n")
-    audit = agent.audit(issue_threads)
+    # ── Battle Report ──────────────────────────────────────────
+    print(f"\n{'=' * 60}")
+    print("         A.R.C. Battle Report")
+    print(f"{'=' * 60}\n")
 
-    print("=" * 60)
-    print("         A.R.C. Audit Report")
-    print("=" * 60)
+    audit = critic.audit(issue_threads)
     print(audit)
-    print("=" * 60)
 
-    # Dump final state
+    # MVP
+    total = len(issue_threads)
+    fixed = len([i for i in issue_threads.values() if i["status"] == "resolved"])
+    acked = len([i for i in issue_threads.values() if i["status"] == "acknowledged"])
+    open_count = len([i for i in issue_threads.values() if i["status"] == "open"])
+    disagrees = sum(
+        1 for i in issue_threads.values()
+        for h in i["history"]
+        if h["role"] == "agent" and h["content"].startswith("[DISAGREE]")
+    )
+
+    print(f"\n{'=' * 60}")
+    print(f"  Issues: {total} total | {fixed} fixed | {acked} acknowledged | {open_count} open")
+    print(f"  Pushbacks: {disagrees} [DISAGREE] from Agent")
+    if disagrees >= 2:
+        print(f"  MVP: Agent (won {disagrees} debates)")
+    elif fixed > total // 2:
+        print(f"  MVP: Critic (found {total} issues, {fixed} fixed)")
+    else:
+        print(f"  MVP: Draw")
+    print(f"{'=' * 60}")
+
+    # Dump threads
     print("\n--- Final Issue State (JSON) ---")
     print(json.dumps(issue_threads, indent=2, ensure_ascii=False))
 
 
-def _fallback_actor_reply(issue_threads: dict, open_issues: dict, output: str) -> None:
-    """When Claude doesn't provide structured reply, stuff raw output into all open issues."""
-    snippet = output[-500:] if len(output) > 500 else output
+def _fallback_agent_reply(issue_threads: dict, open_issues: dict, output: str) -> None:
+    """When Agent doesn't provide structured reply, mark parse failure."""
     for uid in open_issues:
         issue_threads[uid]["history"].append({
-            "role": "actor",
-            "content": f"[unstructured response] {snippet}",
+            "role": "agent",
+            "content": "[parse failed] No structured <audit_reply> returned.",
         })
 
 
@@ -240,5 +323,5 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[A.R.C.] Interrupted.")
+        print("\n[A.R.C.] Human intervened. Court adjourned.")
         sys.exit(0)

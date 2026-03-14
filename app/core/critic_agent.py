@@ -36,7 +36,10 @@ For each review turn, you receive:
 Your tasks:
 1. For existing "open" issues: read the actor's reply in the history carefully.
    The actor's reply starts with a tag: [FIXED], [NOT FIXED], or [DISAGREE].
-   - [FIXED]: Verify the fix is correct. If so, set "status" to "resolved".
+   - [FIXED]: Do NOT blindly trust this claim. Check the "Current Changes (Git Diff)"
+     section below to confirm the code was actually changed as described. If the diff
+     shows no changes to the claimed file, keep "status" as "open" and call it out.
+     If the diff confirms the fix, set "status" to "resolved".
    - [NOT FIXED]: Actor could not fix it (needs human). Set "status" to "acknowledged" if reasonable.
    - [DISAGREE]: The actor is pushing back on your finding. This is a democratic debate.
      DEBATE RULE: Evaluate the actor's argument fairly, as an equal.
@@ -47,6 +50,8 @@ Your tasks:
      You have equal standing. Neither side has veto power. Argue on facts, not authority.
 2. For NEW issues not already tracked: create a new ISSUE-ID (e.g. ISSUE-5).
 3. NEVER re-report an issue that already has an ISSUE-ID. Check the threads first.
+4. SILENCE ON CLOSED ISSUES: If an issue is already "resolved" or "acknowledged",
+   DO NOT include it in your output. Only output "open" issues and new issues.
 
 You MUST output ONLY a JSON object (no markdown fences, no extra text) like:
 {
@@ -117,6 +122,7 @@ class CriticAgent:
         issue_threads: dict,
         diff: str | None = None,
         repo_context: str | None = None,
+        seen_targets: set[str] | None = None,
     ) -> dict:
         """Stateful review: takes issue threads dict, returns JSON updates.
 
@@ -124,6 +130,7 @@ class CriticAgent:
             issue_threads: Current state of all issues.
             diff: Git diff string (optional).
             repo_context: Full repo contents (optional).
+            seen_targets: Set of file_line strings already settled (Double Jeopardy).
 
         Returns:
             Dict of issue updates keyed by ISSUE-ID.
@@ -141,6 +148,15 @@ class CriticAgent:
         else:
             parts.append("## Current Issue Threads\nNone yet. This is the first review.")
 
+        if seen_targets:
+            parts.append(
+                f"## Settled Locations (Double Jeopardy)\n"
+                f"The following code locations have already been resolved or acknowledged. "
+                f"Do NOT re-file new issues targeting these locations unless you have "
+                f"genuinely new evidence (not the same argument):\n"
+                + "\n".join(f"- {t}" for t in sorted(seen_targets))
+            )
+
         if diff:
             parts.append(f"## Current Changes (Git Diff)\n{diff}")
 
@@ -152,17 +168,33 @@ class CriticAgent:
             user="\n\n".join(parts),
         )
 
-        # Extract JSON robustly (LLM may wrap in markdown fences)
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
-            print(f"[Critic] Failed to parse JSON from response:\n{raw[:200]}")
+        # Extract JSON robustly: strip markdown fences, find outermost braces
+        clean = raw.replace("```json", "").replace("```", "").strip()
+        first = clean.find("{")
+        last = clean.rfind("}")
+
+        if first == -1 or last == -1 or last <= first:
+            print(f"[Critic] No valid JSON found in response:\n{raw[:200]}")
             return {}
 
+        json_str = clean[first : last + 1]
+
         try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            print(f"[Critic] Invalid JSON in response:\n{raw[:200]}")
+            parsed = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"[Critic] JSON parse error ({e}):\n{json_str[:200]}")
             return {}
+
+        # Physical filter: drop echoed closed issues the LLM ignored the prompt about
+        filtered = {}
+        for uid, update in parsed.items():
+            if uid in issue_threads:
+                old = issue_threads[uid].get("status")
+                new = update.get("status")
+                if old in ("resolved", "acknowledged") and new in ("resolved", "acknowledged"):
+                    continue
+            filtered[uid] = update
+        return filtered
 
     def audit(self, issue_threads: dict) -> str:
         """Generate audit report from the final issue threads state."""
