@@ -13,6 +13,10 @@ class GeminiClient(LLMClient):
     def __init__(self, api_key: str, model: str):
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        # Token usage tracking
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.tokens_cached = 0
 
     def chat(self, system: str, user: str, max_tokens: int = 500_000) -> str:
         return self.chat_multi(system, [{"role": "user", "content": user}], max_tokens)
@@ -38,6 +42,13 @@ class GeminiClient(LLMClient):
             contents=contents,
             config=config,
         )
+
+        # Track token usage
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            self.tokens_in += getattr(usage, "prompt_token_count", 0) or 0
+            self.tokens_out += getattr(usage, "candidates_token_count", 0) or 0
+            self.tokens_cached += getattr(usage, "cached_content_token_count", 0) or 0
 
         # Extract text parts, skipping thinking parts
         parts = []

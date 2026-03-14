@@ -16,7 +16,7 @@ Your job:
 3. If the code is completely clean with no issues, output exactly [PASS] and nothing else.
 
 For each issue include:
-- File path and line number
+- File path, approximate line number, and a 1-2 line code snippet
 - Severity: critical / error / warning / info
 - What's wrong and how to fix it (direction only — don't write the fix)
 
@@ -58,25 +58,27 @@ Your tasks:
    number or slightly reworded complaint — if the core argument is the same, it is
    forbidden. Accept the outcome and move on.
 
+LOCATION FORMAT: For each issue provide "file" (path), "approx_line" (integer),
+and "snippet" (1-2 lines of the problematic code). The snippet is the anchor —
+line numbers shift during edits, but the snippet stays accurate.
+
 You MUST output ONLY a JSON object (no markdown fences, no extra text) like:
 {
   "ISSUE-1": {
     "status": "resolved",
-    "file_line": "app/auth.py:45",
+    "file": "app/auth.py",
+    "approx_line": 45,
+    "snippet": "password = 'hardcoded'",
     "severity": "critical",
     "reply": "Fix looks correct."
   },
   "ISSUE-2": {
-    "status": "acknowledged",
-    "file_line": "requirements.txt:5",
-    "severity": "error",
-    "reply": "Accepted. I was wrong about the package name. Ignoring this issue."
-  },
-  "ISSUE-3": {
     "status": "open",
-    "file_line": "utils.py:10",
+    "file": "utils.py",
+    "approx_line": 10,
+    "snippet": "except Exception:",
     "severity": "error",
-    "reply": "Still catching bare Exception. Catch specific exceptions."
+    "reply": "Still catching bare Exception."
   }
 }
 
@@ -127,7 +129,7 @@ class CriticAgent:
         issue_threads: dict,
         diff: str | None = None,
         repo_context: str | None = None,
-        seen_targets: set[str] | None = None,
+        seen_targets: list[dict] | None = None,
     ) -> dict:
         """Stateful review: takes issue threads dict, returns JSON updates.
 
@@ -135,7 +137,7 @@ class CriticAgent:
             issue_threads: Current state of all issues.
             diff: Git diff string (optional).
             repo_context: Full repo contents (optional).
-            seen_targets: Set of file_line strings already settled (Double Jeopardy).
+            seen_targets: List of settled issue dicts with file/approx_line/snippet.
 
         Returns:
             Dict of issue updates keyed by ISSUE-ID.
@@ -154,12 +156,16 @@ class CriticAgent:
             parts.append("## Current Issue Threads\nNone yet. This is the first review.")
 
         if seen_targets:
+            targets_str = "\n".join(
+                f"- {t.get('file', '?')}:~{t.get('approx_line', '?')} (`{t.get('snippet', '')}`)"
+                for t in seen_targets
+            )
             parts.append(
                 f"## Settled Locations (Double Jeopardy)\n"
                 f"The following code locations have already been resolved or acknowledged. "
                 f"Do NOT re-file new issues targeting these locations unless you have "
                 f"genuinely new evidence (not the same argument):\n"
-                + "\n".join(f"- {t}" for t in sorted(seen_targets))
+                f"{targets_str}"
             )
 
         if diff:
@@ -215,7 +221,9 @@ class CriticAgent:
             "5. **Critic Hallucinations**: Issues where YOU (Critic) were wrong.\n"
             "6. **Critic Score** (1-10): How precise were YOUR review comments?\n"
             "7. **Agent Score** (1-10): How well did the engineer execute fixes?\n"
-            "8. **Final Advice**: One sentence for the human team lead.\n\n"
+            "8. **Token Efficiency** (1-10): Rate context cache utilization based on the "
+            "FinOps data provided. High cache hit ratio = high score. No data = N/A.\n"
+            "9. **Final Advice**: One sentence for the human team lead.\n\n"
             "SCORING RULE: The orchestrator has computed these objective facts:\n"
             f"{objective_stats}\n"
             "You MUST incorporate these facts into your scores. If the Agent won many "

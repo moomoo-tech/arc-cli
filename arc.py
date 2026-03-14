@@ -37,6 +37,9 @@ Fix the code based on the open issues below.
 Each issue has a history of debate between the Critic and you (Agent).
 Read the full history of each issue carefully before acting.
 
+LOCATION: Each issue has "file", "approx_line", and "snippet". Line numbers may have
+shifted due to edits — use the "snippet" as your anchor to find the correct code.
+
 Rules:
 1. Fix what you can. Push back on what you cannot or disagree with.
 2. Every reply MUST start with exactly one of these tags:
@@ -110,6 +113,7 @@ def main():
         print("[Critic] Reviewing codebase...\n")
         review = critic.review(diff=diff, repo_context=repo_context)
         print(review)
+        _print_finops(critic)
         return
 
     # Blackboard Pattern: structured issue threads
@@ -124,32 +128,29 @@ def main():
 
         diff, repo_context = _build_context(args.scope, repo_path, turn)
 
-        # Double Jeopardy: collect file_lines that are already settled
-        seen_targets = {
-            issue["file_line"]
-            for issue in issue_threads.values()
-            if issue["status"] in ("resolved", "acknowledged") and issue.get("file_line")
-        }
+        # 3D Double Jeopardy: settled issues as list of dicts
+        seen_targets = [
+            issue for issue in issue_threads.values()
+            if issue["status"] in ("resolved", "acknowledged")
+        ]
 
         print("[Critic] Reviewing...")
         updates = critic.review_stateful(
             issue_threads=issue_threads,
             diff=diff,
             repo_context=repo_context,
-            seen_targets=seen_targets,
+            seen_targets=seen_targets if seen_targets else None,
         )
 
-        # Merge updates (skip noise on already-closed issues)
+        # Merge updates
         for uid, update in updates.items():
-            target = update.get("file_line", "")
-
-            # Double Jeopardy: re-filed issue on a settled code location (fuzzy ±3 lines)
-            if uid not in issue_threads and _is_double_jeopardy(target, seen_targets):
+            # 3D Double Jeopardy check (file + snippet + line radius)
+            if uid not in issue_threads and _is_double_jeopardy(update, seen_targets):
                 if args.strict:
-                    print(f"  [blocked] {uid} ({target}) — Double Jeopardy: within blast radius of settled issue.")
+                    print(f"  [blocked] {uid} ({update.get('file')}:~{update.get('approx_line')}) — Double Jeopardy.")
                     continue
                 else:
-                    print(f"  [warning] {uid} ({target}) — re-filing near settled location.")
+                    print(f"  [warning] {uid} ({update.get('file')}:~{update.get('approx_line')}) — re-filing near settled location.")
 
             if uid in issue_threads:
                 old_status = issue_threads[uid]["status"]
@@ -160,15 +161,16 @@ def main():
             if uid not in issue_threads:
                 issue_threads[uid] = {
                     "status": "open",
-                    "file_line": update.get("file_line", "unknown"),
+                    "file": update.get("file", "unknown"),
+                    "approx_line": update.get("approx_line", 0),
+                    "snippet": update.get("snippet", ""),
                     "severity": update.get("severity", "warning"),
                     "history": [],
                 }
             issue_threads[uid]["status"] = update.get("status", "open")
-            if update.get("file_line"):
-                issue_threads[uid]["file_line"] = update["file_line"]
-            if update.get("severity"):
-                issue_threads[uid]["severity"] = update["severity"]
+            for key in ("file", "approx_line", "snippet", "severity"):
+                if update.get(key):
+                    issue_threads[uid][key] = update[key]
             reply = update.get("reply", "")
             if reply:
                 issue_threads[uid]["history"].append({
@@ -184,7 +186,9 @@ def main():
         print(f"\n  Scoreboard: {len(open_issues)} open | {len(resolved)} resolved | {len(acked)} acknowledged")
         for uid, issue in open_issues.items():
             reply = issue["history"][-1]["content"] if issue["history"] else ""
-            print(f"\n  [{uid}] {issue['severity'].upper()} {issue['file_line']}")
+            print(f"\n  [{uid}] {issue.get('severity', 'warning').upper()} {issue.get('file', '?')}:~{issue.get('approx_line', '?')}")
+            if issue.get("snippet"):
+                print(f"  Snippet: `{issue.get('snippet')}`")
             print(f"  {reply}")
 
         # Convergence
@@ -260,7 +264,13 @@ def main():
 
     # ── Battle Report ──────────────────────────────────────────
 
-    # Compute objective stats before audit
+    print(f"\n{'=' * 60}")
+    print("         A.R.C. Battle Report")
+    print(f"{'=' * 60}")
+
+    t_in, t_out, t_cached = _print_finops(critic)
+
+    # Compute objective stats
     total = len(issue_threads)
     fixed = len([i for i in issue_threads.values() if i["status"] == "resolved"])
     acked = len([i for i in issue_threads.values() if i["status"] == "acknowledged"])
@@ -271,22 +281,18 @@ def main():
         if h["role"] == "agent" and "[DISAGREE]" in h["content"]
     )
 
-    # Build objective stats string to force honest scoring
     objective_stats = (
         f"- Total issues: {total}\n"
         f"- Resolved: {fixed}, Acknowledged: {acked}, Open: {open_count}\n"
         f"- Agent [DISAGREE] pushbacks: {disagrees}\n"
+        f"- Input tokens: {t_in:,}, Output tokens: {t_out:,}, Cached: {t_cached:,}\n"
     )
     if acked > 0:
         objective_stats += f"- Critic was wrong on {acked} issue(s) (acknowledged = Critic error).\n"
     if disagrees >= 5:
         objective_stats += "- The Agent overwhelmingly dominated the debates. The Critic was frequently incorrect.\n"
 
-    print(f"\n{'=' * 60}")
-    print("         A.R.C. Battle Report")
-    print(f"{'=' * 60}")
-
-    # Objective scoreboard first
+    # Objective scoreboard
     print(f"\n  [Objective Scoreboard]")
     print(f"  Issues    : {total} total | {fixed} fixed | {acked} acknowledged | {open_count} open")
     print(f"  Pushbacks : {disagrees} [DISAGREE] from Agent")
@@ -298,7 +304,7 @@ def main():
         print(f"  MVP       : Draw")
     print(f"{'-' * 60}")
 
-    # Critic's subjective audit second
+    # Critic's subjective audit
     print("\n  [Critic's Audit]")
     audit = critic.audit(issue_threads, objective_stats=objective_stats)
     print(audit)
@@ -309,35 +315,47 @@ def main():
     print(json.dumps(issue_threads, indent=2, ensure_ascii=False))
 
 
-def _is_double_jeopardy(new_target: str, seen_targets: set[str], radius: int = 3) -> bool:
-    """Fuzzy match file_line to prevent LLM from re-filing by tweaking line numbers."""
-    if not new_target:
-        return False
-
-    def parse(t: str):
-        parts = str(t).rsplit(":", 1)
-        filepath = parts[0].strip()
-        lines = [int(x) for x in re.findall(r"\d+", parts[1])] if len(parts) > 1 else []
-        return filepath, lines
-
-    new_f, new_l = parse(new_target)
-    if not new_f:
+def _is_double_jeopardy(new_issue: dict, seen_targets: list[dict], radius: int = 5) -> bool:
+    """3D Double Jeopardy: file + snippet containment + line radius."""
+    new_f = new_issue.get("file")
+    if not new_f or new_f == "unknown":
         return False
 
     for seen in seen_targets:
-        if not seen:
+        if new_f != seen.get("file"):
             continue
-        seen_f, seen_l = parse(seen)
-        if new_f != seen_f:
-            continue
-        # Same file, no line numbers on either side = file-level match
-        if not new_l or not seen_l:
-            return True
-        # Both have line numbers — check within radius
-        if any(abs(n - s) <= radius for n in new_l for s in seen_l):
+
+        # Snippet containment match
+        new_snip = new_issue.get("snippet", "").strip()
+        seen_snip = seen.get("snippet", "").strip()
+        if new_snip and seen_snip and len(new_snip) > 5 and (new_snip in seen_snip or seen_snip in new_snip):
             return True
 
+        # Line radius match
+        n_line = new_issue.get("approx_line")
+        s_line = seen.get("approx_line")
+        if isinstance(n_line, int) and isinstance(s_line, int) and n_line > 0 and s_line > 0:
+            if abs(n_line - s_line) <= radius:
+                return True
+
     return False
+
+
+def _print_finops(critic: CriticAgent) -> tuple[int, int, int]:
+    """Print token usage stats and return (tokens_in, tokens_out, tokens_cached)."""
+    t_in = getattr(critic.client, "tokens_in", 0)
+    t_out = getattr(critic.client, "tokens_out", 0)
+    t_cached = getattr(critic.client, "tokens_cached", 0)
+
+    if t_in > 0 or t_out > 0:
+        hit_ratio = (t_cached / t_in * 100) if t_in > 0 else 0.0
+        print(f"\n  [FinOps]")
+        print(f"  Input Tokens  : {t_in:,}")
+        print(f"  Output Tokens : {t_out:,}")
+        if t_cached > 0:
+            print(f"  Cache Hits    : {t_cached:,} ({hit_ratio:.1f}%)")
+
+    return t_in, t_out, t_cached
 
 
 def _fallback_agent_reply(issue_threads: dict, open_issues: dict, output: str) -> None:

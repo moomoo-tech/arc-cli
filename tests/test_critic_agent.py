@@ -1,4 +1,4 @@
-"""Tests for CriticAgent: stateful review, JSON parsing, and Double Jeopardy."""
+"""Tests for CriticAgent: stateful review, JSON parsing, Double Jeopardy, FinOps."""
 
 import json
 from unittest.mock import patch
@@ -24,7 +24,8 @@ class TestStatefulJsonParsing:
 
     def test_clean_json(self, mock_client):
         mock_client.response = json.dumps({
-            "ISSUE-1": {"status": "open", "file_line": "foo.py:10", "severity": "error", "reply": "bug"}
+            "ISSUE-1": {"status": "open", "file": "foo.py", "approx_line": 10,
+                        "snippet": "x = 1", "severity": "error", "reply": "bug"}
         })
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads={}, repo_context="code")
@@ -32,13 +33,13 @@ class TestStatefulJsonParsing:
         assert result["ISSUE-1"]["status"] == "open"
 
     def test_json_in_markdown_fences(self, mock_client):
-        mock_client.response = '```json\n{"ISSUE-1": {"status": "open", "file_line": "a.py:1", "severity": "error", "reply": "x"}}\n```'
+        mock_client.response = '```json\n{"ISSUE-1": {"status": "open", "file": "a.py", "approx_line": 1, "snippet": "x", "severity": "error", "reply": "x"}}\n```'
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads={}, repo_context="code")
         assert "ISSUE-1" in result
 
     def test_json_with_surrounding_text(self, mock_client):
-        mock_client.response = 'Here is my review:\n{"ISSUE-1": {"status": "open", "file_line": "a.py:1", "severity": "error", "reply": "x"}}\nDone.'
+        mock_client.response = 'Here is my review:\n{"ISSUE-1": {"status": "open", "file": "a.py", "approx_line": 1, "snippet": "x", "severity": "error", "reply": "x"}}\nDone.'
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads={}, repo_context="code")
         assert "ISSUE-1" in result
@@ -60,25 +61,27 @@ class TestStatefulJsonParsing:
 
 
 class TestClosedIssueFilter:
-    """review_stateful must drop echoed closed issues."""
+    """review_stateful must drop echoed closed issues and block zombies."""
+
+    def _make_thread(self, status):
+        return {"status": status, "file": "a.py", "approx_line": 1,
+                "snippet": "x", "severity": "error", "history": []}
 
     def test_resolved_echo_dropped(self, mock_client):
-        threads = {
-            "ISSUE-1": {"status": "resolved", "file_line": "a.py:1", "severity": "error", "history": []},
-        }
+        threads = {"ISSUE-1": self._make_thread("resolved")}
         mock_client.response = json.dumps({
-            "ISSUE-1": {"status": "resolved", "file_line": "a.py:1", "severity": "error", "reply": "still resolved"},
+            "ISSUE-1": {"status": "resolved", "file": "a.py", "approx_line": 1,
+                        "snippet": "x", "severity": "error", "reply": "still resolved"},
         })
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads=threads, repo_context="code")
         assert "ISSUE-1" not in result
 
     def test_acknowledged_echo_dropped(self, mock_client):
-        threads = {
-            "ISSUE-2": {"status": "acknowledged", "file_line": "b.py:5", "severity": "warning", "history": []},
-        }
+        threads = {"ISSUE-2": self._make_thread("acknowledged")}
         mock_client.response = json.dumps({
-            "ISSUE-2": {"status": "acknowledged", "file_line": "b.py:5", "severity": "warning", "reply": "yep"},
+            "ISSUE-2": {"status": "acknowledged", "file": "b.py", "approx_line": 5,
+                        "snippet": "y", "severity": "warning", "reply": "yep"},
         })
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads=threads, repo_context="code")
@@ -86,22 +89,20 @@ class TestClosedIssueFilter:
 
     def test_zombie_reopen_blocked(self, mock_client):
         """Once closed, Gemini cannot re-open — absolute lock."""
-        threads = {
-            "ISSUE-1": {"status": "resolved", "file_line": "a.py:1", "severity": "error", "history": []},
-        }
+        threads = {"ISSUE-1": self._make_thread("resolved")}
         mock_client.response = json.dumps({
-            "ISSUE-1": {"status": "open", "file_line": "a.py:1", "severity": "error", "reply": "fix was wrong"},
+            "ISSUE-1": {"status": "open", "file": "a.py", "approx_line": 1,
+                        "snippet": "x", "severity": "error", "reply": "fix was wrong"},
         })
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads=threads, repo_context="code")
-        assert "ISSUE-1" not in result  # blocked by absolute lock
+        assert "ISSUE-1" not in result
 
     def test_new_issue_passes_through(self, mock_client):
-        threads = {
-            "ISSUE-1": {"status": "resolved", "file_line": "a.py:1", "severity": "error", "history": []},
-        }
+        threads = {"ISSUE-1": self._make_thread("resolved")}
         mock_client.response = json.dumps({
-            "ISSUE-2": {"status": "open", "file_line": "c.py:20", "severity": "warning", "reply": "new bug"},
+            "ISSUE-2": {"status": "open", "file": "c.py", "approx_line": 20,
+                        "snippet": "z", "severity": "warning", "reply": "new bug"},
         })
         agent = CriticAgent()
         result = agent.review_stateful(issue_threads=threads, repo_context="code")
@@ -116,15 +117,15 @@ class TestSeenTargetsPrompt:
 
     def test_seen_targets_in_prompt(self, mock_client):
         mock_client.response = "{}"
+        targets = [
+            {"file": "foo.py", "approx_line": 10, "snippet": "x = 1"},
+            {"file": "bar.py", "approx_line": 20, "snippet": "y = 2"},
+        ]
         agent = CriticAgent()
-        agent.review_stateful(
-            issue_threads={},
-            repo_context="code",
-            seen_targets={"foo.py:10", "bar.py:20"},
-        )
+        agent.review_stateful(issue_threads={}, repo_context="code", seen_targets=targets)
         assert "## Settled Locations (Double Jeopardy)" in mock_client.last_user
-        assert "foo.py:10" in mock_client.last_user
-        assert "bar.py:20" in mock_client.last_user
+        assert "foo.py:~10" in mock_client.last_user
+        assert "bar.py:~20" in mock_client.last_user
 
     def test_no_seen_targets_no_section(self, mock_client):
         mock_client.response = "{}"
@@ -135,7 +136,7 @@ class TestSeenTargetsPrompt:
     def test_empty_seen_targets_no_section(self, mock_client):
         mock_client.response = "{}"
         agent = CriticAgent()
-        agent.review_stateful(issue_threads={}, repo_context="code", seen_targets=set())
+        agent.review_stateful(issue_threads={}, repo_context="code", seen_targets=[])
         assert "Settled Locations" not in mock_client.last_user
 
 
@@ -153,11 +154,12 @@ class TestStatefulPromptContent:
 
     def test_existing_threads_in_prompt(self, mock_client):
         mock_client.response = "{}"
-        threads = {"ISSUE-1": {"status": "open", "file_line": "x.py:1", "severity": "error", "history": []}}
+        threads = {"ISSUE-1": {"status": "open", "file": "x.py", "approx_line": 1,
+                                "snippet": "bad code", "severity": "error", "history": []}}
         agent = CriticAgent()
         agent.review_stateful(issue_threads=threads, repo_context="code")
         assert "ISSUE-1" in mock_client.last_user
-        assert "x.py:1" in mock_client.last_user
+        assert "x.py" in mock_client.last_user
 
     def test_diff_in_prompt(self, mock_client):
         mock_client.response = "{}"
@@ -174,42 +176,67 @@ class TestStatefulPromptContent:
         assert "full repo here" in mock_client.last_user
 
 
-# ── Double Jeopardy: fuzzy matching ───────────────────────────────
+# ── Double Jeopardy: 3D fuzzy matching ────────────────────────────
 
 
 class TestDoubleJeopardy:
-    """Test _is_double_jeopardy fuzzy line matching from arc.py."""
+    """Test _is_double_jeopardy 3D matching (file + snippet + line radius)."""
 
     def setup_method(self):
         from arc import _is_double_jeopardy
         self.check = _is_double_jeopardy
 
+    def _issue(self, file="foo.py", line=10, snippet="x = 1"):
+        return {"file": file, "approx_line": line, "snippet": snippet}
+
     def test_exact_match(self):
-        assert self.check("foo.py:10", {"foo.py:10"})
+        assert self.check(self._issue(), [self._issue()])
 
-    def test_within_radius(self):
-        assert self.check("foo.py:12", {"foo.py:10"})  # diff = 2, radius = 3
+    def test_snippet_containment(self):
+        assert self.check(
+            self._issue(snippet="x = 1"),
+            [self._issue(snippet="x = 1  # comment")],
+        )
 
-    def test_outside_radius(self):
-        assert not self.check("foo.py:20", {"foo.py:10"})  # diff = 10
+    def test_snippet_reverse_containment(self):
+        assert self.check(
+            self._issue(snippet="x = 1  # comment"),
+            [self._issue(snippet="x = 1")],
+        )
+
+    def test_within_line_radius(self):
+        assert self.check(self._issue(line=12), [self._issue(line=10, snippet="")])
+
+    def test_outside_line_radius(self):
+        assert not self.check(self._issue(line=20, snippet=""), [self._issue(line=10, snippet="")])
 
     def test_different_file(self):
-        assert not self.check("bar.py:10", {"foo.py:10"})
+        assert not self.check(self._issue(file="bar.py"), [self._issue(file="foo.py")])
 
-    def test_file_only_vs_file_with_line(self):
-        assert self.check("foo.py", {"foo.py:10"})  # no line = whole file
-
-    def test_file_with_line_vs_file_only(self):
-        assert self.check("foo.py:5", {"foo.py"})
-
-    def test_range_line_numbers(self):
-        assert self.check("req.txt:4-5", {"req.txt:5"})  # line 5 matches exactly
-
-    def test_empty_target(self):
-        assert not self.check("", {"foo.py:10"})
+    def test_different_snippet_different_line(self):
+        assert not self.check(
+            self._issue(file="foo.py", line=50, snippet="y = 2"),
+            [self._issue(file="foo.py", line=10, snippet="x = 1")],
+        )
 
     def test_empty_seen(self):
-        assert not self.check("foo.py:10", set())
+        assert not self.check(self._issue(), [])
 
-    def test_no_match_in_seen(self):
-        assert not self.check("foo.py:10", {"bar.py:1", "baz.py:99"})
+    def test_unknown_file(self):
+        assert not self.check({"file": "unknown", "approx_line": 1, "snippet": "x"}, [self._issue()])
+
+
+# ── Token tracking (FinOps) ───────────────────────────────────────
+
+
+class TestTokenTracking:
+    """GeminiClient should track token usage."""
+
+    def test_gemini_client_has_counters(self):
+        from app.llm.gemini_client import GeminiClient
+        # Can't instantiate without API key, but check class has the attrs
+        import inspect
+        source = inspect.getsource(GeminiClient.__init__)
+        assert "tokens_in" in source
+        assert "tokens_out" in source
+        assert "tokens_cached" in source
