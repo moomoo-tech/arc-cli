@@ -157,7 +157,7 @@ class CriticAgent:
 
         if seen_targets:
             targets_str = "\n".join(
-                f"- {t.get('file', '?')}:~{t.get('approx_line', '?')} (`{t.get('snippet', '')}`)"
+                f"- {t.get('file', '?')}:~{t.get('approx_line', '?')} (`{str(t.get('snippet', '')).replace(chr(10), ' ')}`)"
                 for t in seen_targets
             )
             parts.append(

@@ -354,6 +354,7 @@ def _print_finops(critic: CriticAgent) -> tuple[int, int, int]:
         print(f"  Output Tokens : {t_out:,}")
         if t_cached > 0:
             print(f"  Cache Hits    : {t_cached:,} ({hit_ratio:.1f}%)")
+        print(f"{'-' * 60}")
 
     return t_in, t_out, t_cached
 
