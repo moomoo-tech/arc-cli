@@ -49,15 +49,23 @@ Rules:
      intentional design choice). Give a clear, factual reason.
 3. If you already disagreed in a prior round and the Critic re-opened the same issue,
    hold your ground. Repeat your reasoning with evidence.
+4. QUOTE THE THREAD: In your reply, quote the Critic's main point to prove you are
+   addressing the right issue.
 
+CRITICAL OUTPUT FORMAT:
 After all fixes, you MUST end your response with an <audit_reply> XML tag containing
-a JSON object keyed by ISSUE-ID:
+a JSON object keyed by ISSUE-ID. Each value has "quote" and "reply":
 
 <audit_reply>
 {{
-  "ISSUE-1": "[FIXED] Changed to use os.getenv()",
-  "ISSUE-2": "[DISAGREE] google-genai is the correct package. genai.Client() is the valid API.",
-  "ISSUE-3": "[NOT FIXED] Needs human decision on auth provider."
+  "ISSUE-1": {{
+    "quote": "Critic: max_tokens default is 500_000",
+    "reply": "[FIXED] Changed default to 16_384 across all clients."
+  }},
+  "ISSUE-2": {{
+    "quote": "Critic: genai.Client is not a valid API",
+    "reply": "[DISAGREE] google-genai uses genai.Client(), not google-generativeai."
+  }}
 }}
 </audit_reply>
 
@@ -254,7 +262,10 @@ def main():
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(proc.returncode, "claude")
 
-            # Parse structured reply
+            # Parse structured reply (JSON primary + regex fallback)
+            parsed_uids = set()
+
+            # Try 1: strict JSON from <audit_reply> tags
             match = re.search(
                 r"<audit_reply>\s*(\{.*?\})\s*</audit_reply>",
                 agent_output,
@@ -263,19 +274,47 @@ def main():
             if match:
                 try:
                     replies = json.loads(match.group(1))
-                    for uid, reply in replies.items():
-                        if uid in issue_threads:
+                    for uid, payload in replies.items():
+                        if uid not in issue_threads:
+                            continue
+                        # Support both {"quote": "...", "reply": "..."} and plain string
+                        if isinstance(payload, dict):
+                            content = payload.get("reply", "")
+                        else:
+                            content = str(payload)
+                        if content:
                             issue_threads[uid]["history"].append({
                                 "role": "agent",
-                                "content": reply,
+                                "content": content,
                             })
-                    print(f"[Agent] {len(replies)} responses logged.\n")
+                            parsed_uids.add(uid)
                 except json.JSONDecodeError:
-                    print("[Agent] Warning: malformed JSON in <audit_reply>.\n")
-                    _fallback_agent_reply(issue_threads, open_issues, agent_output)
-            else:
-                print("[Agent] Warning: no <audit_reply> tag found.\n")
-                _fallback_agent_reply(issue_threads, open_issues, agent_output)
+                    pass
+
+            # Try 2: regex fallback for unstructured Markdown output
+            missing_uids = set(open_issues.keys()) - parsed_uids
+            if missing_uids:
+                for uid in missing_uids:
+                    pattern = re.compile(
+                        rf"{uid}.*?((?:Critic.*?)??\[(?:FIXED|NOT FIXED|DISAGREE)\].*?)(?=\bISSUE-\d+\b|\Z)",
+                        re.IGNORECASE | re.DOTALL,
+                    )
+                    fallback_match = pattern.search(agent_output)
+                    if fallback_match:
+                        content = fallback_match.group(1).strip()
+                        content = re.sub(r"^[-—\s*]*", "", content)
+                        issue_threads[uid]["history"].append({
+                            "role": "agent",
+                            "content": content,
+                        })
+                        parsed_uids.add(uid)
+                    else:
+                        issue_threads[uid]["history"].append({
+                            "role": "agent",
+                            "content": "[parse failed] No structured reply or recognizable tag found.",
+                        })
+
+            print(f"[Agent] {len(parsed_uids)}/{len(open_issues)} responses parsed.\n")
 
         except FileNotFoundError:
             print("[A.R.C.] `claude` not found. Install: npm install -g @anthropic-ai/claude-code")
@@ -379,15 +418,6 @@ def _print_finops(critic: CriticAgent) -> tuple[int, int, int]:
         print(f"{'-' * 60}")
 
     return t_in, t_out, t_cached
-
-
-def _fallback_agent_reply(issue_threads: dict, open_issues: dict, output: str) -> None:
-    """When Agent doesn't provide structured reply, mark parse failure."""
-    for uid in open_issues:
-        issue_threads[uid]["history"].append({
-            "role": "agent",
-            "content": "[parse failed] No structured <audit_reply> returned.",
-        })
 
 
 def _build_context(scope: str, repo_path: str, turn: int):
