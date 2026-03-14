@@ -17,11 +17,13 @@ MAX_TURNS = 3
 CLAUDE_PROMPT_TEMPLATE = (
     "You are a senior engineer. "
     "Fix the local code based strictly on the following review report. "
-    "Do not add anything beyond what the report asks for. "
-    "After fixing, briefly list the files you changed.\n"
-    "Then on a separate line, rate the reviewer's suggestions: "
-    "[Reviewer Score: X/10] followed by a short reason "
-    "(e.g. clear directions / wrong line numbers / hallucinated file).\n\n"
+    "Do not add anything beyond what the report asks for.\n\n"
+    "You MUST respond to EVERY comment in the review, one by one, using this format:\n"
+    "- [FIXED] <file:line> — what you changed\n"
+    "- [NOT FIXED] <file:line> — why you could not fix it (e.g. needs human decision)\n"
+    "- [DISAGREE] <file:line> — why the reviewer is wrong (hallucination, incorrect assumption)\n\n"
+    "After all comments, add:\n"
+    "[Reviewer Score: X/10] followed by a short reason.\n\n"
     "--- Review Report ---\n{review}"
 )
 
@@ -113,7 +115,9 @@ def main():
                 text=True,
                 check=True,
             )
-            session_log.append(f"[Turn {turn} - Actor Execution]\n{result.stdout}")
+            actor_output = result.stdout
+            session_log.append(f"[Turn {turn} - Actor Execution]\n{actor_output}")
+            agent.add_actor_feedback(actor_output)
             print(f"[Actor] Turn {turn} fixes applied. Re-reviewing...\n")
         except FileNotFoundError:
             session_log.append(f"[Turn {turn} - Actor Error]\nclaude CLI not found")

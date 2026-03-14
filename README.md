@@ -31,22 +31,22 @@ All config via environment variables (prefix `ARC_`), or `.env` file:
 | `ARC_LLM_MODEL` | LLM model ID (default: `claude-sonnet-4-20250514`) | — |
 | `ARC_WATCH_DIR` | Local runner watch directory (default: `/tmp/arc_watch`) | — |
 
-### GitHub Token 权限
+### GitHub Token Permissions
 
-Token 是给**被审查的目标仓库**的（比如 tars），不是 arc 自己的仓库。
+The token is for the **target repo being reviewed** (e.g. tars), not the arc repo itself.
 
-**Fine-grained PAT 所需权限：**
-- `Pull requests`: Read & Write（拉 diff + 发评论）
-- `Contents`: Read（读取文件内容）
+**Fine-grained PAT required permissions:**
+- `Pull requests`: Read & Write (fetch diff + post comments)
+- `Contents`: Read (read file contents)
 
-**两种 Auth 方案：**
+**Two auth options:**
 
-| 方案 | 适用场景 | 说明 |
+| Option | Use case | Notes |
 |------|---------|------|
-| **Personal Access Token (PAT)** | 本地开发、快速验证 | 最快，当前代码默认支持 |
-| **GitHub App** | 生产部署、多仓库 | 需改代码支持 App Auth，Phase 2 |
+| **Personal Access Token (PAT)** | Local dev, quick validation | Fastest, currently supported by default |
+| **GitHub App** | Production, multi-repo | Requires code changes for App Auth, Phase 2 |
 
-### .env 示例
+### .env Example
 
 ```env
 ARC_GITHUB_TOKEN=github_pat_xxxxx
@@ -63,12 +63,12 @@ GitHub PR Event
     ▼
 ┌──────────────────────────────┐
 │  webhook_receiver.py         │
-│  验签 → 提取 PR 信息 →       │
-│  后台任务 dispatch            │
+│  Verify signature → Extract  │
+│  PR info → Background task   │
 └──────────┬───────────────────┘
            │
     ┌──────▼──────┐     ┌─────────────────┐
-    │ GitHubClient │────▶│ 拉 PR diff       │
+    │ GitHubClient │────▶│ Fetch PR diff    │
     └──────┬──────┘     └─────────────────┘
            │
     ┌──────▼──────┐     ┌─────────────────┐
@@ -78,7 +78,7 @@ GitHub PR Event
     └──────┬──────┘     └─────────────────┘
            │
     ┌──────▼──────┐     ┌─────────────────┐
-    │ GitHubClient │────▶│ 发 PR 评论       │
+    │ GitHubClient │────▶│ Post PR comments │
     └─────────────┘     └─────────────────┘
 ```
 
@@ -86,10 +86,10 @@ GitHub PR Event
 
 | Module | Path | Job |
 |--------|------|-----|
-| **API Gateway** | `app/api/webhook_receiver.py` | 收 webhook，验签，dispatch |
-| **Critic Agent** | `app/core/critic_agent.py` | 拼 prompt，调 LLM，解析评论 |
-| **Rubric Parser** | `app/core/rubric_parser.py` | 加载 YAML rubrics |
-| **GitHub Client** | `app/githandler/client.py` | PyGithub 封装：拉 diff + 发评论 |
-| **Actor Watchdog** | `app/local_runner/actor_watchdog.py` | 本地轮询，触发 Aider |
-| **Config** | `config/settings.py` | Pydantic Settings，`ARC_` 前缀 |
-| **Rubrics** | `rubrics/*.yaml` | 审查规则（默认自动加载） |
+| **API Gateway** | `app/api/webhook_receiver.py` | Receive webhook, verify signature, dispatch |
+| **Critic Agent** | `app/core/critic_agent.py` | Build prompt, call LLM, parse comments |
+| **Rubric Parser** | `app/core/rubric_parser.py` | Load YAML rubrics |
+| **GitHub Client** | `app/githandler/client.py` | PyGithub wrapper: fetch diff + post comments |
+| **Actor Watchdog** | `app/local_runner/actor_watchdog.py` | Local polling, invoke Aider |
+| **Config** | `config/settings.py` | Pydantic Settings, `ARC_` prefix |
+| **Rubrics** | `rubrics/*.yaml` | Review rules (auto-loaded by default) |

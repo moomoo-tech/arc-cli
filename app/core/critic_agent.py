@@ -20,12 +20,12 @@ For each issue include:
 Rules:
 - Flag real bugs, security issues, architectural problems, and code smells.
 - Be concise and actionable. No fluff.
-- When all issues are resolved, you MUST output [PASS].
+- Output [PASS] when no critical or error issues remain. Minor warnings and info items can stay open.
 """
 
 
 class CriticAgent:
-    """Calls LLM to review code. Returns review text."""
+    """Calls LLM to review code. Maintains conversation history across turns."""
 
     def __init__(self, rubric_paths: list[str] | None = None):
         self.client = create_client(
@@ -38,13 +38,14 @@ class CriticAgent:
             parser = RubricParser()
             rules = parser.load(rubric_paths)
             self.rubric_text = parser.format_rules(rules)
+        self.history: list[dict[str, str]] = []
 
     def review(
         self,
         diff: str | None = None,
         repo_context: str | None = None,
     ) -> str:
-        """Review code based on whatever context is provided.
+        """Review code. Appends to conversation history so the LLM sees prior turns.
 
         Args:
             diff: Git diff string (optional).
@@ -64,10 +65,35 @@ class CriticAgent:
         if repo_context:
             parts.append(f"## Full Codebase\n{repo_context}")
 
-        return self.client.chat(
+        user_msg = "\n\n".join(parts)
+        self.history.append({"role": "user", "content": user_msg})
+
+        response = self.client.chat_multi(
             system=SYSTEM_PROMPT,
-            user="\n\n".join(parts),
+            messages=self.history,
         )
+
+        self.history.append({"role": "assistant", "content": response})
+        return response
+
+    def add_actor_feedback(self, feedback: str) -> None:
+        """Inject the actor's (Claude) response into conversation history.
+
+        This lets the critic see what the actor did and said in prior turns,
+        and instructs the critic to resolve each comment.
+        """
+        self.history.append({"role": "user", "content": (
+            "The engineer has responded to each of your review comments below.\n"
+            "For each comment, you MUST now assign a status:\n"
+            "- [RESOLVED] — the fix is correct, issue is closed.\n"
+            "- [ACKNOWLEDGED] — the engineer disagrees or cannot fix it, "
+            "and you accept their reasoning. Issue closed.\n"
+            "- [OPEN] — the fix is wrong or incomplete, issue remains open.\n\n"
+            "Then re-review the updated codebase (provided in the next message). "
+            "Output [PASS] when you are satisfied overall — even if some minor/info "
+            "issues remain open. Only keep the loop going for critical or error issues.\n\n"
+            "--- Engineer's Report ---\n" + feedback
+        )})
 
     def audit(self, session_log: str) -> str:
         """Generate a structured audit report from the full session log."""

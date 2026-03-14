@@ -1,38 +1,38 @@
 # A.R.C. — TODO
 
-## Phase 1: 本地跑通第一条 PR 评论 (MVP)
+## Phase 1: First PR Comment Locally (MVP)
 
-- [x] Webhook 签名验证 (`webhook_receiver.py`)
-- [x] PyGithub 拉 diff + 发评论 (`githandler/client.py`)
-- [x] Rubric YAML 加载 + 格式化 (`rubric_parser.py`)
-- [x] **接通 LLM 调用** — `critic_agent.py` 调 Claude API，解析结构化评论
-- [x] **接通 webhook dispatch** — `webhook_receiver.py` 调 CriticAgent + GitHubClient，PR 里留评论
-- [x] **Critic 自动生成 `<architectural_directive>` XML 评论**
-- [ ] 配置 `.env`（PAT + Anthropic key）
-- [ ] 本地用 smee.io + FastAPI 验证端到端
+- [x] Webhook signature verification (`webhook_receiver.py`)
+- [x] PyGithub fetch diff + post comments (`githandler/client.py`)
+- [x] Rubric YAML loading + formatting (`rubric_parser.py`)
+- [x] **Wire up LLM call** — `critic_agent.py` calls Claude API, parses structured comments
+- [x] **Wire up webhook dispatch** — `webhook_receiver.py` calls CriticAgent + GitHubClient, posts PR comments
+- [x] **Critic auto-generates `<architectural_directive>` XML comments**
+- [ ] Configure `.env` (PAT + Anthropic key)
+- [ ] Local e2e test with smee.io + FastAPI
 
-## Phase 2: 本地 Actor (Aider 自动执行)
+## Phase 2: Local Actor (Aider Auto-Execution)
 
-- [x] **webhook 路由** — `issue_comment` 事件触发 Actor 流程
-- [x] **XML 提取** — `extract_directives()` 解析 `<architectural_directive>` 标签
-- [x] **Aider 调用** — `run_actor()` checkout branch → aider --auto-commits → git push
-- [x] **防无限循环** — `bot_username` 过滤，只处理自己发的评论
-- [ ] 安装 Aider（`pip install aider-chat`）
-- [ ] 配置 `ARC_LOCAL_REPO_PATH` 和 `ARC_BOT_USERNAME`
-- [ ] 端到端验证：PR → Critic 评论 → Actor 改代码 → push
+- [x] **Webhook routing** — `issue_comment` event triggers Actor flow
+- [x] **XML extraction** — `extract_directives()` parses `<architectural_directive>` tags
+- [x] **Aider invocation** — `run_actor()` checkout branch → aider --auto-commits → git push
+- [x] **Infinite loop prevention** — `bot_username` filter, only process own comments
+- [ ] Install Aider (`pip install aider-chat`)
+- [ ] Configure `ARC_LOCAL_REPO_PATH` and `ARC_BOT_USERNAME`
+- [ ] E2e validation: PR → Critic comments → Actor fixes code → push
 
-## Phase 3: 迁移到 GCP Cloud Functions（Critic 上云）
+## Phase 3: Migrate to GCP Cloud Functions (Critic in the Cloud)
 
-- [ ] 新建 `main.py`（`functions_framework.http` 入口）
-- [ ] 密钥迁移到 GCP Secret Manager，环境变量注入
-- [ ] `gcloud functions deploy` 部署
-- [ ] GitHub App Webhook URL 指向 GCP Function URL
-- [ ] `.gcloudignore` 排除 local_runner/
-- [ ] 本地只保留 Actor（webhook 监听 or 轮询）
+- [ ] Create `main.py` (`functions_framework.http` entry point)
+- [ ] Migrate secrets to GCP Secret Manager, inject via env vars
+- [ ] `gcloud functions deploy`
+- [ ] Point GitHub App Webhook URL to GCP Function URL
+- [ ] `.gcloudignore` to exclude local_runner/
+- [ ] Keep only Actor locally (webhook listener or polling)
 
-## Phase 4: 肌肉展示 (Show Time)
+## Phase 4: Show Time
 
-- [ ] 在业务仓库提 PR → Critic 自动评论
-- [ ] 本地 Actor 激活 → Aider 自动修复 → 推送
-- [ ] push 触发 synchronize → Critic 二次审查
-- [ ] 端到端 AI 研发闭环验证
+- [ ] Submit PR in target repo → Critic auto-comments
+- [ ] Local Actor activates → Aider auto-fixes → push
+- [ ] Push triggers synchronize → Critic re-reviews
+- [ ] End-to-end AI dev loop validation

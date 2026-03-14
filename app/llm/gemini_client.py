@@ -5,6 +5,8 @@ from google.genai import types
 
 from app.llm.base import LLMClient
 
+MAX_OUTPUT_TOKENS = 500_000
+
 
 class GeminiClient(LLMClient):
 
@@ -12,23 +14,36 @@ class GeminiClient(LLMClient):
         self._client = genai.Client(api_key=api_key)
         self._model = model
 
-    def chat(self, system: str, user: str, max_tokens: int = 4096) -> str:
+    def chat(self, system: str, user: str, max_tokens: int = 500_000) -> str:
+        return self.chat_multi(system, [{"role": "user", "content": user}], max_tokens)
+
+    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 500_000) -> str:
         config = types.GenerateContentConfig(
             system_instruction=system,
-            max_output_tokens=65536,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=8192),
         )
 
+        # Convert messages to Gemini content format
+        contents = []
+        for msg in messages:
+            role = "model" if msg["role"] == "assistant" else "user"
+            contents.append(types.Content(
+                role=role,
+                parts=[types.Part(text=msg["content"])],
+            ))
+
         response = self._client.models.generate_content(
             model=self._model,
-            contents=user,
+            contents=contents,
             config=config,
         )
 
         # Extract text parts, skipping thinking parts
         parts = []
         for candidate in response.candidates:
-            for part in candidate.content.parts:
-                if part.text and not getattr(part, "thought", False):
-                    parts.append(part.text)
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    if part.text and not getattr(part, "thought", False):
+                        parts.append(part.text)
         return "\n".join(parts) if parts else ""
