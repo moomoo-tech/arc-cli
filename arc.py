@@ -341,8 +341,11 @@ def main():
         except subprocess.CalledProcessError as e:
             print(f"[A.R.C.] Agent crashed with code {e.returncode}")
             break
+        except KeyboardInterrupt:
+            print("\n[A.R.C.] Interrupted. Dumping partial report...")
+            break
 
-    # ── Battle Report ──────────────────────────────────────────
+    # ── Battle Report (always runs, even on interrupt) ─────────
 
     print(f"\n{'=' * 60}")
     print("         A.R.C. Battle Report")
@@ -385,12 +388,16 @@ def main():
     print(f"{'-' * 60}")
 
     # Critic's subjective audit
-    print("\n  [Critic's Audit]")
-    audit = critic.audit(issue_threads, objective_stats=objective_stats)
-    print(audit)
+    try:
+        print("\n  [Critic's Audit]")
+        audit = critic.audit(issue_threads, objective_stats=objective_stats)
+        print(audit)
+    except (KeyboardInterrupt, Exception) as e:
+        print(f"\n  [Critic's Audit] Skipped ({type(e).__name__})")
+
     print(f"{'=' * 60}")
 
-    # Dump threads
+    # Dump threads (always, even on partial run)
     print("\n--- Final Issue State (JSON) ---")
     print(json.dumps(issue_threads, indent=2, ensure_ascii=False))
 
