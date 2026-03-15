@@ -234,8 +234,6 @@ def main():
             for idx, msg in enumerate(history):
                 prefix = "  └─" if idx == len(history) - 1 else "  ├─"
                 content = msg["content"].strip().replace("\n", " ")
-                if len(content) > 120:
-                    content = content[:117] + "..."
                 role = "Critic" if msg["role"] == "critic" else "Agent "
                 print(f"  {prefix} {role}: {content}")
 
