@@ -181,9 +181,21 @@ def main():
                     issue_threads[uid][key] = update[key]
             reply = update.get("reply", "")
             if reply:
+                # Inject status tag into content so Claude sees it in context
+                status = update.get("status", "open")
+                history_len = len(issue_threads[uid]["history"])
+                if history_len == 0:
+                    tag = "[NEW]"
+                elif status == "resolved":
+                    tag = "[VERIFIED]"
+                elif status == "acknowledged":
+                    tag = "[ACKED]"
+                else:
+                    tag = "[REOPEN]"
+
                 issue_threads[uid]["history"].append({
                     "role": "critic",
-                    "content": reply,
+                    "content": f"{tag} {reply}",
                 })
 
         # Scoreboard
@@ -192,34 +204,40 @@ def main():
         acked = {k: v for k, v in issue_threads.items() if v["status"] == "acknowledged"}
 
         print(f"\n  Scoreboard: {len(open_issues)} open | {len(resolved)} resolved | {len(acked)} acknowledged")
-        for uid, issue in open_issues.items():
-            print(f"\n  [{uid}] {issue.get('severity', 'warning').upper()} {issue.get('file', '?')}:~{issue.get('approx_line', '?')}")
-            if issue.get("snippet"):
+
+        # Show open issues + just-closed issues (curtain call before they disappear)
+        just_closed = [
+            uid for uid in updates
+            if uid in issue_threads and issue_threads[uid]["status"] in ("resolved", "acknowledged")
+        ]
+        display_uids = list(open_issues.keys()) + just_closed
+        display_uids.sort(key=lambda x: int(x.split("-")[1]) if "-" in x and x.split("-")[1].isdigit() else 0)
+
+        for uid in display_uids:
+            issue = issue_threads[uid]
+            status = issue["status"]
+
+            if status == "resolved":
+                label = "RESOLVED"
+            elif status == "acknowledged":
+                label = "ACKNOWLEDGED"
+            else:
+                label = issue.get("severity", "warning").upper()
+
+            print(f"\n  [{uid}] {label} {issue.get('file', '?')}:~{issue.get('approx_line', '?')}")
+            if issue.get("snippet") and status == "open":
                 print(f"  Snippet: `{issue.get('snippet')}`")
-            # Thread dialogue tree
+
+            # Thread dialogue tree (tags already in content)
             print("  Thread:")
             history = issue.get("history", [])
-            critic_count = 0
             for idx, msg in enumerate(history):
-                is_last = idx == len(history) - 1
-                prefix = "  └─" if is_last else "  ├─"
+                prefix = "  └─" if idx == len(history) - 1 else "  ├─"
                 content = msg["content"].strip().replace("\n", " ")
                 if len(content) > 120:
                     content = content[:117] + "..."
-
-                if msg["role"] == "critic":
-                    critic_count += 1
-                    if critic_count == 1:
-                        tag = "[NEW]"
-                    elif issue["status"] == "resolved":
-                        tag = "[VERIFIED]"
-                    elif issue["status"] == "acknowledged":
-                        tag = "[ACKED]"
-                    else:
-                        tag = "[REOPEN]"
-                    print(f"  {prefix} Critic {tag}: {content}")
-                else:
-                    print(f"  {prefix} Agent: {content}")
+                role = "Critic" if msg["role"] == "critic" else "Agent "
+                print(f"  {prefix} {role}: {content}")
 
         # Convergence
         if not open_issues:
