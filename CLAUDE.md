@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working on this repository.
 
 ## Project Overview
 
-A.R.C. (Agent Review Critic) is a CLI tool that reviews code against architectural rubrics (YAML rule files). It brute-force reads your entire repo, sends it with the git diff to Claude via native Tool Use, and gets back a review with optional auto-fixes.
+A.R.C. (Adversarial Resolution Cycle) is a CLI tool that pits two LLMs against each other: a Critic reviews code, an Agent fixes it, they debate in structured JSON threads until convergence.
 
 - **Language:** Python 3.12+
 - **License:** Apache 2.0
@@ -12,44 +12,37 @@ A.R.C. (Agent Review Critic) is a CLI tool that reviews code against architectur
 ## Commands
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run a review on the current repo
-python arc.py
-
-# Review a specific repo
-python arc.py /path/to/repo
-
-# Review only (no auto-fixes)
-python arc.py --review-only
-
-# Use custom rubrics
-python arc.py --rubrics my_rules.yaml
+pip install -e ".[dev]"              # install with all deps + pytest
+pytest                                # run tests (50+)
+python arc.py                         # review current repo
+python arc.py --fix --max-turns 5     # Agent vs Critic loop
 ```
 
 ## Architecture
 
-Three modules, dead simple:
+- **`arc.py`** — CLI entry point. Parses args, runs fix loop, prints Battle Report.
+- **`app/context.py`** — Reads repo via `git ls-files` with noise filtering (200KB cap).
+- **`app/core/critic_agent.py`** — Critic prompts (free-form + stateful JSON). Parses LLM JSON responses. Generates audit report.
+- **`app/core/rubric_parser.py`** — Loads YAML rubric rules from `rubrics/`.
+- **`app/core/utils.py`** — `is_double_jeopardy()` fuzzy matching (file + snippet + line radius).
+- **`app/llm/`** — Multi-provider LLM abstraction. `base.py` ABC, `factory.py` creates by provider name. Gemini client tracks token usage.
+- **`config/settings.py`** — Pydantic Settings from `.env` (prefix `ARC_`).
 
-- **`arc.py`** — CLI entry point (argparse). Orchestrates the flow: diff → context → agent loop → output.
-- **`app/context.py`** — Brute-force repo context builder. Walks the entire repo, packs all code files into one string. No AST, no optimization.
-- **`app/core/critic_agent.py`** — Pure Claude Agent Loop. Sends rubrics + diff + full repo to Claude with Tool Use. Claude reviews and calls `apply_code_patch` to fix issues directly.
-- **`app/core/rubric_parser.py`** — YAML rubric loader. Reads `rubrics/*.yaml` and formats rules for the prompt.
+## Key Design Decisions
 
-### Flow
-
-1. `arc.py` runs `git diff` and reads the entire repo into a string.
-2. Sends everything (rubrics + diff + full codebase) to Claude in one shot.
-3. Claude reviews against rubrics, calls `apply_code_patch` tool to fix issues.
-4. Python executes the search-and-replace on disk, feeds result back to Claude.
-5. Loop until Claude stops calling tools. Print summary.
+- **Blackboard Pattern**: Issues tracked as `Dict[ISSUE-ID, {status, file, approx_line, snippet, history}]`
+- **Democratic debate**: Neither Critic nor Agent has veto. Deadlocks go to human.
+- **Status tags** (`[NEW]`, `[REOPEN]`, `[VERIFIED]`, `[ACKED]`) are injected into history content so both LLMs see them in context.
+- **Double Jeopardy**: Settled issues blocked from re-filing (fuzzy ±5 line radius + snippet containment).
+- **Absolute lock**: Once resolved/acknowledged, cannot be reopened by Critic.
+- **Agent uses Claude Code CLI** (`claude -p`) via subprocess, not the Anthropic SDK — it needs `Read`/`Edit`/`Bash` tools to modify files.
 
 ## Configuration
 
-Environment variables (prefix `ARC_`) or `.env` file:
+All via environment variables (prefix `ARC_`) or `.env` file:
 
 | Variable | Purpose |
 |---|---|
-| `ARC_LLM_API_KEY` | Anthropic API key |
-| `ARC_LLM_MODEL` | LLM model ID (default: claude-sonnet-4-20250514) |
+| `ARC_LLM_PROVIDER` | `anthropic`, `openai`, or `gemini` |
+| `ARC_LLM_API_KEY` | API key |
+| `ARC_LLM_MODEL` | Model ID |

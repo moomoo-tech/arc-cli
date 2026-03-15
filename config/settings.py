@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = "claude-sonnet-4-20250514"
 
-    model_config = {"env_prefix": "ARC_", "env_file": ".env.local"}
+    model_config = {"env_prefix": "ARC_", "env_file": ".env"}
 
 
 settings = Settings()

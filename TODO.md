@@ -1,38 +1,39 @@
 # A.R.C. — TODO
 
-## Phase 1: First PR Comment Locally (MVP)
+## v0.1.0 (done)
 
-- [x] Webhook signature verification (`webhook_receiver.py`)
-- [x] PyGithub fetch diff + post comments (`githandler/client.py`)
-- [x] Rubric YAML loading + formatting (`rubric_parser.py`)
-- [x] **Wire up LLM call** — `critic_agent.py` calls Claude API, parses structured comments
-- [x] **Wire up webhook dispatch** — `webhook_receiver.py` calls CriticAgent + GitHubClient, posts PR comments
-- [x] **Critic auto-generates `<architectural_directive>` XML comments**
-- [ ] Configure `.env` (PAT + Anthropic key)
-- [ ] Local e2e test with smee.io + FastAPI
+- [x] Multi-provider LLM abstraction (Anthropic, OpenAI, Gemini)
+- [x] Brute-force repo context via `git ls-files` with noise filtering
+- [x] Single-shot free-form review
+- [x] CLI flags: `--scope`, `--rubric`, `--fix`, `--max-turns`, `--strict`
+- [x] Blackboard Pattern: structured JSON issue threads
+- [x] Democratic debate with `[FIXED]`/`[DISAGREE]`/`[NOT FIXED]` tags
+- [x] Status tags injected into history (`[NEW]`/`[REOPEN]`/`[VERIFIED]`/`[ACKED]`)
+- [x] Quote-the-thread: Agent must cite Critic's point
+- [x] Smart reply parser: JSON primary + regex fallback
+- [x] Double Jeopardy: fuzzy 3D matching (file + snippet + ±5 line radius)
+- [x] Absolute lock: no zombie re-opening of closed issues
+- [x] Res Judicata: no re-arguing settled topics under new IDs
+- [x] Verify the Diff: Critic checks git diff before accepting `[FIXED]`
+- [x] FinOps token panel (Gemini usage_metadata tracking)
+- [x] Objective scoring: Python stats force honest Critic self-assessment
+- [x] Battle Report with MVP calculation
+- [x] Thread dialogue tree in scoreboard
+- [x] Curtain call for just-closed issues
+- [x] Graceful interrupt: partial report on timeout/ctrl-c
+- [x] `pyproject.toml` for pip distribution
+- [x] 50+ tests
 
-## Phase 2: Local Actor (Aider Auto-Execution)
+## v0.2.0 (next)
 
-- [x] **Webhook routing** — `issue_comment` event triggers Actor flow
-- [x] **XML extraction** — `extract_directives()` parses `<architectural_directive>` tags
-- [x] **Aider invocation** — `run_actor()` checkout branch → aider --auto-commits → git push
-- [x] **Infinite loop prevention** — `bot_username` filter, only process own comments
-- [ ] Install Aider (`pip install aider-chat`)
-- [ ] Configure `ARC_LOCAL_REPO_PATH` and `ARC_BOT_USERNAME`
-- [ ] E2e validation: PR → Critic comments → Actor fixes code → push
+- [ ] Streaming Critic output (show review as it arrives)
+- [ ] Token usage tracking for Anthropic and OpenAI clients
+- [ ] Configurable thinking budget for Gemini
+- [ ] Save battle report to file (`--output report.json`)
+- [ ] GitHub Action: publish to PyPI on tag
+- [ ] Homebrew formula
 
-## Phase 3: Migrate to GCP Cloud Functions (Critic in the Cloud)
+## Future
 
-- [ ] Create `main.py` (`functions_framework.http` entry point)
-- [ ] Migrate secrets to GCP Secret Manager, inject via env vars
-- [ ] `gcloud functions deploy`
-- [ ] Point GitHub App Webhook URL to GCP Function URL
-- [ ] `.gcloudignore` to exclude local_runner/
-- [ ] Keep only Actor locally (webhook listener or polling)
-
-## Phase 4: Show Time
-
-- [ ] Submit PR in target repo → Critic auto-comments
-- [ ] Local Actor activates → Aider auto-fixes → push
-- [ ] Push triggers synchronize → Critic re-reviews
-- [ ] End-to-end AI dev loop validation
+- [ ] Custom rubric authoring guide
+- [ ] Multi-repo batch review
