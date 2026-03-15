@@ -7,7 +7,7 @@ class LLMClient(ABC):
     """Common interface for all LLM providers."""
 
     @abstractmethod
-    def chat(self, system: str, user: str, max_tokens: int = 500_000) -> str:
+    def chat(self, system: str, user: str, max_tokens: int = 16_384) -> str:
         """Send a single-turn chat and return the response text."""
 
     @abstractmethod
@@ -15,7 +15,7 @@ class LLMClient(ABC):
         self,
         system: str,
         messages: list[dict[str, str]],
-        max_tokens: int = 500_000,
+        max_tokens: int = 16_384,
     ) -> str:
         """Send a multi-turn chat and return the response text.
 

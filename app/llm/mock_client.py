@@ -15,13 +15,13 @@ class MockClient(LLMClient):
         self.call_count: int = 0
         self.response: str = "LGTM — no issues found."
 
-    def chat(self, system: str, user: str, max_tokens: int = 500_000) -> str:
+    def chat(self, system: str, user: str, max_tokens: int = 16_384) -> str:
         self.last_system = system
         self.last_user = user
         self.call_count += 1
         return self.response
 
-    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 500_000) -> str:
+    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 16_384) -> str:
         self.last_system = system
         self.last_messages = messages
         self.last_user = messages[-1]["content"] if messages else ""

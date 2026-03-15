@@ -11,7 +11,7 @@ class OpenAIClient(LLMClient):
         self._client = OpenAI(api_key=api_key)
         self._model = model
 
-    def chat(self, system: str, user: str, max_tokens: int = 500_000) -> str:
+    def chat(self, system: str, user: str, max_tokens: int = 16_384) -> str:
         response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=max_tokens,
@@ -20,13 +20,13 @@ class OpenAIClient(LLMClient):
                 {"role": "user", "content": user},
             ],
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
 
-    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 500_000) -> str:
+    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 16_384) -> str:
         all_messages = [{"role": "system", "content": system}, *messages]
         response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=max_tokens,
             messages=all_messages,
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""

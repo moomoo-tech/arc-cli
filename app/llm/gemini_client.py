@@ -5,7 +5,7 @@ from google.genai import types
 
 from app.llm.base import LLMClient
 
-MAX_OUTPUT_TOKENS = 500_000
+THINKING_BUDGET = 8192
 
 
 class GeminiClient(LLMClient):
@@ -18,14 +18,14 @@ class GeminiClient(LLMClient):
         self.tokens_out = 0
         self.tokens_cached = 0
 
-    def chat(self, system: str, user: str, max_tokens: int = 500_000) -> str:
+    def chat(self, system: str, user: str, max_tokens: int = 16_384) -> str:
         return self.chat_multi(system, [{"role": "user", "content": user}], max_tokens)
 
-    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 500_000) -> str:
+    def chat_multi(self, system: str, messages: list[dict[str, str]], max_tokens: int = 16_384) -> str:
         config = types.GenerateContentConfig(
             system_instruction=system,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            thinking_config=types.ThinkingConfig(thinking_budget=8192),
+            max_output_tokens=max_tokens,
+            thinking_config=types.ThinkingConfig(thinking_budget=THINKING_BUDGET),
         )
 
         # Convert messages to Gemini content format
