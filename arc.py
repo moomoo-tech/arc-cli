@@ -53,21 +53,21 @@ Rules:
    addressing the right issue.
 
 CRITICAL OUTPUT FORMAT:
-After all fixes, you MUST end your response with an <audit_reply> XML tag containing
+After all fixes, you MUST end your response with an <agent_reply> XML tag containing
 a JSON object keyed by ISSUE-ID. Each value has "quote" and "reply":
 
-<audit_reply>
+<agent_reply>
 {{
   "ISSUE-1": {{
-    "quote": "Critic: max_tokens default is 500_000",
+    "quote": "Critic: [NEW] max_tokens default is 500_000",
     "reply": "[FIXED] Changed default to 16_384 across all clients."
   }},
   "ISSUE-2": {{
-    "quote": "Critic: genai.Client is not a valid API",
+    "quote": "Critic: [REOPEN] genai.Client is not a valid API",
     "reply": "[DISAGREE] google-genai uses genai.Client(), not google-generativeai."
   }}
 }}
-</audit_reply>
+</agent_reply>
 
 --- Open Issues ---
 {open_issues}"""
@@ -283,9 +283,9 @@ def main():
             # Parse structured reply (JSON primary + regex fallback)
             parsed_uids = set()
 
-            # Try 1: strict JSON from <audit_reply> tags
+            # Try 1: strict JSON from <agent_reply> tags
             match = re.search(
-                r"<audit_reply>\s*(\{.*?\})\s*</audit_reply>",
+                r"<agent_reply>\s*(\{.*?\})\s*</agent_reply>",
                 agent_output,
                 re.DOTALL,
             )
