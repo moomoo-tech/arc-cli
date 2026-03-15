@@ -181,21 +181,24 @@ def main():
                     issue_threads[uid][key] = update[key]
             reply = update.get("reply", "")
             if reply:
-                # Inject status tag into content so Claude sees it in context
-                status = update.get("status", "open")
-                history_len = len(issue_threads[uid]["history"])
-                if history_len == 0:
-                    tag = "[NEW]"
-                elif status == "resolved":
-                    tag = "[VERIFIED]"
-                elif status == "acknowledged":
-                    tag = "[ACKED]"
-                else:
-                    tag = "[REOPEN]"
+                # Inject status tag unless LLM already included one
+                TAGS = ("[NEW]", "[REOPEN]", "[VERIFIED]", "[ACKED]")
+                if not reply.strip().startswith(TAGS):
+                    status = update.get("status", "open")
+                    history_len = len(issue_threads[uid]["history"])
+                    if history_len == 0:
+                        tag = "[NEW]"
+                    elif status == "resolved":
+                        tag = "[VERIFIED]"
+                    elif status == "acknowledged":
+                        tag = "[ACKED]"
+                    else:
+                        tag = "[REOPEN]"
+                    reply = f"{tag} {reply}"
 
                 issue_threads[uid]["history"].append({
                     "role": "critic",
-                    "content": f"{tag} {reply}",
+                    "content": reply,
                 })
 
         # Scoreboard
