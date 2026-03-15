@@ -7,10 +7,12 @@ import random
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from app.context import get_git_diff, get_whole_repo_context
 from app.core.critic_agent import CriticAgent
+from app.core.utils import is_double_jeopardy
 
 RUBRIC_DIR = Path(__file__).resolve().parent / "rubrics"
 DEFAULT_RUBRICS = [str(p) for p in RUBRIC_DIR.glob("*.yaml")]
@@ -153,7 +155,7 @@ def main():
         # Merge updates
         for uid, update in updates.items():
             # 3D Double Jeopardy check (file + snippet + line radius)
-            if uid not in issue_threads and _is_double_jeopardy(update, seen_targets):
+            if uid not in issue_threads and is_double_jeopardy(update, seen_targets):
                 if args.strict:
                     print(f"  [blocked] {uid} ({update.get('file')}:~{update.get('approx_line')}) — Double Jeopardy.")
                     continue
@@ -265,8 +267,12 @@ def main():
                 cwd=repo_path,
                 text=True,
             )
-            proc.stdin.write(claude_prompt)
-            proc.stdin.close()
+            def _feed_stdin(p, data):
+                p.stdin.write(data)
+                p.stdin.close()
+
+            writer = threading.Thread(target=_feed_stdin, args=(proc, claude_prompt))
+            writer.start()
 
             print("-" * 60)
             agent_lines = []
@@ -275,6 +281,7 @@ def main():
                 agent_lines.append(line)
             print("-" * 60)
 
+            writer.join()
             proc.wait()
             agent_output = "".join(agent_lines)
 
@@ -401,31 +408,6 @@ def main():
     print("\n--- Final Issue State (JSON) ---")
     print(json.dumps(issue_threads, indent=2, ensure_ascii=False))
 
-
-def _is_double_jeopardy(new_issue: dict, seen_targets: list[dict], radius: int = 5) -> bool:
-    """3D Double Jeopardy: file + snippet containment + line radius."""
-    new_f = new_issue.get("file")
-    if not new_f or new_f == "unknown":
-        return False
-
-    for seen in seen_targets:
-        if new_f != seen.get("file"):
-            continue
-
-        # Snippet containment match
-        new_snip = new_issue.get("snippet", "").strip()
-        seen_snip = seen.get("snippet", "").strip()
-        if new_snip and seen_snip and len(new_snip) > 5 and (new_snip in seen_snip or seen_snip in new_snip):
-            return True
-
-        # Line radius match
-        n_line = new_issue.get("approx_line")
-        s_line = seen.get("approx_line")
-        if isinstance(n_line, int) and isinstance(s_line, int) and n_line > 0 and s_line > 0:
-            if abs(n_line - s_line) <= radius:
-                return True
-
-    return False
 
 
 def _print_finops(critic: CriticAgent) -> tuple[int, int, int]:

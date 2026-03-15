@@ -180,11 +180,11 @@ class TestStatefulPromptContent:
 
 
 class TestDoubleJeopardy:
-    """Test _is_double_jeopardy 3D matching (file + snippet + line radius)."""
+    """Test is_double_jeopardy 3D matching (file + snippet + line radius)."""
 
     def setup_method(self):
-        from arc import _is_double_jeopardy
-        self.check = _is_double_jeopardy
+        from app.core.utils import is_double_jeopardy
+        self.check = is_double_jeopardy
 
     def _issue(self, file="foo.py", line=10, snippet="x = 1"):
         return {"file": file, "approx_line": line, "snippet": snippet}

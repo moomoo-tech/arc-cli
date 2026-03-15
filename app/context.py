@@ -44,7 +44,11 @@ def get_git_diff(repo_path: str = ".") -> str:
         parts.append(staged.stdout)
     if unstaged.stdout:
         parts.append(unstaged.stdout)
-    return "\n".join(parts)
+    combined = "\n".join(parts)
+
+    if len(combined.encode("utf-8", errors="ignore")) > MAX_FILE_SIZE:
+        return combined[:MAX_FILE_SIZE] + "\n\n[DIFF TRUNCATED: exceeded 200KB limit]"
+    return combined
 
 
 def get_whole_repo_context(repo_path: str = ".") -> str:
